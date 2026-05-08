@@ -50,7 +50,13 @@
       "Bash(curl -s -o /dev/null -w \"GET / -> %{http_code}\\\\n\" http://localhost:5173/)",
       "Bash(curl -s -o /dev/null -w \"GET /api/strategies \\(proxied\\) -> %{http_code}\\\\n\" http://localhost:5173/api/strategies)",
       "Bash(curl -s http://localhost:5173/api/strategies)",
-      "Bash(python -c \"import json,sys; print\\(json.dumps\\(json.loads\\(sys.stdin.read\\(\\)\\), indent=2\\)\\)\")"
+      "Bash(python -c \"import json,sys; print\\(json.dumps\\(json.loads\\(sys.stdin.read\\(\\)\\), indent=2\\)\\)\")",
+      "Bash(rm -rf strategies/ema_pilot/runs/*)",
+      "Bash(powershell.exe -NoProfile -Command 'Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Get-NetTCPConnection -LocalPort 5173 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }')",
+      "Bash(curl -s -o /dev/null -w \"GET /api/strategies/ema_pilot/holdout -> %{http_code}\\\\n\" http://127.0.0.1:8000/api/strategies/ema_pilot/holdout)",
+      "Bash(curl -s http://localhost:5173/api/strategies/ema_pilot/holdout)",
+      "Bash(python -c \"import json,sys; d=json.loads\\(sys.stdin.read\\(\\)\\); r=d['report']; print\\('iter:', r['iter']\\); print\\('period:', r['period']\\); print\\('composite:', round\\(r['composite'],4\\)\\); print\\('train+val composite:', round\\(r['best_composite_train_val'],4\\)\\); print\\('OOS sharpe:', round\\(r['metrics']['sharpe'],4\\)\\); print\\('OOS max_dd:', round\\(r['metrics']['max_dd'],4\\)\\); print\\('trades:', r['metrics']['n_trades']\\); print\\('equity points:', len\\(d['equity']['equity']\\)\\)\")",
+      "Bash(rm -rf strategies/ema_pilot/runs/holdout)"
     ]
   }
 }

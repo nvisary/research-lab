@@ -36,7 +36,7 @@ Three layers, in this order:
 |-------------|-------------------------------|------------------------|-------------|
 | **Train**   | 2024-01-01 → ~2025-05         | strategy fitting       | ✅          |
 | **OOS / Val** | ~2025-05 → 2025-09-30      | composite score (keep/revert) | ✅   |
-| **Holdout** | 2025-10-01 → 2025-12-31       | manual sanity only     | 🚫 (during iteration) |
+| **Holdout** | 2025-10-01 → 2026-04-30       | manual sanity only     | 🚫 (during iteration) |
 
 The `runner.iterate` command always runs over `[period_start, period_end)`, defaulting to `2024-01-01 → 2025-10-01`. The harness internally splits that range 75% / 25% into train / OOS. The composite score that decides keep/revert is computed **only on OOS**.
 
@@ -198,7 +198,7 @@ uv run python -m harness.backtest strategies/<name> --period 2024-01-01:2025-10-
 # one iteration with keep/revert + history append (default period = train+val)
 uv run python -m runner.iterate strategies/<name> --note "one-sentence hypothesis"
 
-# holdout sanity check on 2025-Q4 — read-only, does not touch best.json
+# holdout sanity check on 2025-Q4 + 2026-Q1+Apr — read-only, does not touch best.json
 uv run python -m runner.holdout strategies/<name>
 
 # launch dashboard

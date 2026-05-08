@@ -244,7 +244,7 @@ def api_iterate(name: str, body: IterateRequest):
 
 class HoldoutRequest(BaseModel):
     start: str = "2025-10-01"
-    end: str = "2026-01-01"
+    end: str = "2026-05-01"
     tf: str = "1h"
 
 

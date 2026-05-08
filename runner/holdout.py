@@ -29,7 +29,7 @@ from harness.splits import Split
 
 
 DEFAULT_HOLDOUT_START = "2025-10-01"
-DEFAULT_HOLDOUT_END = "2026-01-01"
+DEFAULT_HOLDOUT_END = "2026-05-01"   # 7-month holdout: 2025-Q4 + 2026-Q1+Apr
 
 
 def run_holdout(strategy_dir: Path, start: str, end: str, tf: str = "1h") -> dict:

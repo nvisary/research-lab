@@ -26,7 +26,7 @@ const defaultForm: IterForm = {
   note: "",
 };
 
-const HOLDOUT = { start: "2025-10-01", end: "2026-01-01", tf: "1h" };
+const HOLDOUT = { start: "2025-10-01", end: "2026-05-01", tf: "1h" };
 
 export function StrategyDetail() {
   const { name = "" } = useParams();
@@ -194,7 +194,7 @@ export function StrategyDetail() {
         )}
       </Card>
 
-      <Card title="Holdout sanity check (2025-10 → 2025-12, never seen by iteration)">
+      <Card title="Holdout sanity check (2025-10 → 2026-04, never seen by iteration)">
         <div className="flex items-start gap-6 flex-wrap">
           <div className="flex-1 min-w-[260px]">
             {!holdout?.report ? (

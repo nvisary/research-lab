@@ -109,11 +109,17 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
     equity_path = None
     if curves is not None:
         import pandas as _pd
-        df_curve = _pd.DataFrame({
-            "timestamp": curves["equity"].index,
-            "equity": curves["equity"].values,
-            "benchmark": curves["benchmark"].reindex(curves["equity"].index).values,
-        })
+        eq = curves["equity"]
+        cols = {
+            "timestamp": eq.index,
+            "equity": eq.values,
+            "benchmark": curves["benchmark"].reindex(eq.index).values,
+        }
+        if curves.get("raw_equity") is not None:
+            cols["raw_equity"] = curves["raw_equity"].reindex(eq.index).values
+        if curves.get("funding_cashflow") is not None:
+            cols["funding_cashflow"] = curves["funding_cashflow"].reindex(eq.index).values
+        df_curve = _pd.DataFrame(cols)
         equity_path = equity_dir / f"iter_{iter_id:04d}.parquet"
         df_curve.to_parquet(equity_path, compression="zstd", index=False)
         # Also remember the train/OOS split cutoff for shading the chart
@@ -206,8 +212,8 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("strategy_dir")
-    ap.add_argument("--start", default="2025-01-01")
-    ap.add_argument("--end", default="2025-04-01")
+    ap.add_argument("--start", default="2024-01-01")
+    ap.add_argument("--end", default="2025-10-01")
     ap.add_argument("--tf", default="1h")
     ap.add_argument("--walk", type=int, default=0)
     ap.add_argument("--dd-penalty", type=float, default=0.5)

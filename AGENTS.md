@@ -15,6 +15,7 @@ You are working in a domain where:
 - **The past is not the future.** Every regime changes. 2024-Q1 BTC ranged; 2024-Q4 trended; 2025-Q2 chopped on funding-rate flips. A strategy that wins 2024 in-sample and loses Oct–Dec 2025 has learned the past, not the market.
 - **Multiple-testing is fatal.** Each iteration is a hypothesis. After 100 iterations, the *expected* OOS Sharpe of the best one — under the null hypothesis of zero edge — is positive purely by luck. Treat your kept best with appropriate skepticism, especially before the holdout has spoken.
 - **Costs eat alpha.** Bybit perp taker is 5.5 bps. A strategy with 100 round-trips/day on a 1-bp expected edge is structurally a loss machine.
+- **Funding eats alpha too.** Bybit perp funding is paid every 8h. Mean BTC funding 2024-2026 has been ~+0.007% per cycle = ~7.5%/year drag for a static long. The harness subtracts funding cashflows from equity automatically when funding parquets are on disk; if they're missing, your numbers are silently long-biased.
 
 The goal is **robust edge**, not maximum backtest Sharpe.
 
@@ -191,6 +192,12 @@ uv sync
 uv run python -m datafeed.download_bybit --symbol BTCUSDT --start 2024-01 --end 2025-12
 uv run python -m datafeed.download_bybit --all     --start 2024-01 --end 2025-12 --workers 8
 uv run python -m datafeed.download_bybit --list-symbols
+
+# download Bybit funding rate history (paid every 8h on perp; harness subtracts
+# from equity automatically when present)
+uv run python -m datafeed.download_bybit_funding --symbol BTCUSDT --start 2024-01 --end 2026-04
+uv run python -m datafeed.download_bybit_funding --all --launched-before 2024-01-01 \
+    --start 2024-01 --end 2026-04 --workers 6
 
 # one-shot backtest of current strategy.py (no keep/revert, no history)
 uv run python -m harness.backtest strategies/<name> --period 2024-01-01:2025-10-01 --tf 1h

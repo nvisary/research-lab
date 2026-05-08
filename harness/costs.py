@@ -7,6 +7,7 @@ class CostModel:
     taker_fee: float = 0.00055   # Bybit perp taker
     maker_fee: float = 0.0002    # Bybit perp maker (rebate ignored conservatively)
     slippage_bps: float = 1.0    # 1bp average for liquid majors at 1m
+    apply_funding: bool = True   # subtract funding-rate cashflows from equity
 
     @property
     def total_one_way(self) -> float:

@@ -24,6 +24,7 @@ import vectorbt as vbt
 from datafeed.loader import load_many
 from harness import metrics as M
 from harness.costs import DEFAULT as DEFAULT_COSTS
+from harness.funding import adjust_equity, funding_cashflows
 from harness.splits import Split, train_oos, walk_forward
 
 
@@ -119,20 +120,38 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     except Exception:
         entry_times = pd.Series(dtype="datetime64[ns, UTC]")
 
+    # Funding adjustment: subtract cumulative funding cashflows from equity.
+    # The harness uses adjusted-equity returns for ALL metrics; raw equity is
+    # kept around only for diagnostics in return_curves.
+    raw_equity_full = pf.value()
+    if costs.apply_funding:
+        try:
+            asset_value = pf.asset_value(group_by=False)
+        except Exception:
+            asset_value = prices * 0.0  # vectorbt API drift fallback: no adjustment
+        fcf = funding_cashflows(asset_value, split.train_start, split.oos_end)
+        adj_equity_full = adjust_equity(raw_equity_full, fcf)
+    else:
+        fcf = pd.Series(0.0, index=raw_equity_full.index)
+        adj_equity_full = raw_equity_full
+
+    adj_returns_full = adj_equity_full.pct_change().fillna(0.0)
+
     out = {}
     for label, lo, hi in [("train", split.train_start, split.train_end),
                            ("oos", split.oos_start, split.oos_end)]:
-        mask = (prices.index >= lo) & (prices.index < hi)
-        equity = pf.value()[mask]
-        rets = pf.returns()[mask]
+        mask = (adj_equity_full.index >= lo) & (adj_equity_full.index < hi)
+        equity = adj_equity_full[mask]
+        rets = adj_returns_full[mask]
         positions = target[mask]
         n_trades = int(((entry_times >= lo) & (entry_times < hi)).sum()) if len(entry_times) else 0
         out[label] = M.summary(equity, rets, positions, n_trades=n_trades)
 
     if return_curves:
-        equity_full = pf.value()
-        bench = (prices / prices.iloc[0]).mean(axis=1) * float(equity_full.iloc[0])
-        out["equity"] = equity_full
+        bench = (prices / prices.iloc[0]).mean(axis=1) * float(adj_equity_full.iloc[0])
+        out["equity"] = adj_equity_full
+        out["raw_equity"] = raw_equity_full
+        out["funding_cashflow"] = fcf
         out["benchmark"] = bench
         out["split_cutoff"] = split.train_end
     return out
@@ -160,6 +179,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
             "equity": main.pop("equity"),
             "benchmark": main.pop("benchmark"),
             "split_cutoff": main.pop("split_cutoff"),
+            "raw_equity": main.pop("raw_equity", None),
+            "funding_cashflow": main.pop("funding_cashflow", None),
         }
 
     result = {

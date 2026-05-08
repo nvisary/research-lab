@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import factoryImport from "react-plotly.js/factory";
 // @ts-expect-error — no types for the dist-min bundle
 import Plotly from "plotly.js-basic-dist-min";
-import { api, type TradesPayload, type TradeRow } from "../api";
+import { api, type TradesPayload, type TradeRow, type TradesSummary } from "../api";
 import { fmt, fmtPct } from "../format";
 import { helpFor } from "../metricsHelp";
 import { Tooltip } from "./Tooltip";
@@ -67,18 +67,7 @@ export function TradesCard({ strategy, iter }: Props) {
 
       {tab === "summary" && (
         <div className="grid md:grid-cols-2 gap-6">
-          <table className="text-sm">
-            <tbody>
-              <KV k="trades" v={s.n_trades} />
-              <KV k="win rate" v={fmtPct(s.win_rate)} />
-              <KV k="wins / losses" v={`${s.n_wins ?? 0} / ${s.n_losses ?? 0}`} />
-              <KV k="avg win" v={`$${fmt(s.avg_win, 2)}`} />
-              <KV k="avg loss" v={`$${fmt(s.avg_loss, 2)}`} />
-              <KV k="payoff ratio" v={fmt(s.payoff_ratio, 2)} />
-              <KV k="total PnL" v={`$${fmt(s.total_pnl, 2)}`} />
-              <KV k="median duration" v={`${fmt(s.median_duration_hours, 1)}h`} />
-            </tbody>
-          </table>
+          <SideBySideSummary all={s} long={s.long} short={s.short} />
           <Plot
             data={[histTrace]}
             style={{ width: "100%", height: 240 }}
@@ -154,17 +143,52 @@ function TradeTable({ rows, max }: { rows: TradeRow[]; max?: number }) {
   );
 }
 
-function KV({ k, v }: { k: string; v: React.ReactNode }) {
-  const help = helpFor(k);
+function SideBySideSummary({ all, long, short }:
+  { all: TradesSummary; long?: TradesSummary; short?: TradesSummary }
+) {
+  const hasSplit = (long && (long.n_trades ?? 0) > 0) || (short && (short.n_trades ?? 0) > 0);
+  const cols = hasSplit ? ["all", "long", "short"] as const : ["all"] as const;
+  const data: Record<string, TradesSummary | undefined> = { all, long, short };
+
   return (
-    <tr>
-      <th className="text-left text-slate-400 font-medium pr-4 py-1 align-top w-32">
-        {help ? <Tooltip text={help}>{k}</Tooltip> : k}
-      </th>
-      <td className="py-1 mono">{v}</td>
-    </tr>
+    <table className="text-xs">
+      <thead className="text-slate-400 uppercase tracking-wider">
+        <tr>
+          <th />
+          {cols.map((c) => (
+            <th key={c} className={`text-right px-2 ${c === "long" ? "text-emerald-400" : c === "short" ? "text-rose-400" : ""}`}>
+              {c}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {[
+          { k: "trades", get: (s?: TradesSummary) => s?.n_trades ?? 0 },
+          { k: "win rate", get: (s?: TradesSummary) => fmtPct(s?.win_rate) },
+          { k: "wins / losses", get: (s?: TradesSummary) => `${s?.n_wins ?? 0} / ${s?.n_losses ?? 0}` },
+          { k: "avg win", get: (s?: TradesSummary) => s?.n_wins ? `$${fmt(s?.avg_win, 2)}` : "—" },
+          { k: "avg loss", get: (s?: TradesSummary) => s?.n_losses ? `$${fmt(s?.avg_loss, 2)}` : "—" },
+          { k: "payoff ratio", get: (s?: TradesSummary) => fmt(s?.payoff_ratio, 2) },
+          { k: "total PnL", get: (s?: TradesSummary) => `$${fmt(s?.total_pnl, 2)}` },
+          { k: "median duration", get: (s?: TradesSummary) => `${fmt(s?.median_duration_hours, 1)}h` },
+        ].map(({ k, get }) => (
+          <tr key={k} className="border-b border-edge/40">
+            <th className="text-left text-slate-400 font-medium pr-3 py-1 align-top whitespace-nowrap">
+              {k}
+            </th>
+            {cols.map((c) => (
+              <td key={c} className={`text-right mono py-1 px-2 ${c === "long" ? "text-emerald-300" : c === "short" ? "text-rose-300" : ""}`}>
+                {get(data[c])}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
+
 
 function Th({ children }: { children: React.ReactNode }) {
   const text = typeof children === "string" ? helpFor(children) : undefined;

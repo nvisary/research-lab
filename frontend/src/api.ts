@@ -143,18 +143,23 @@ export type TradeRow = {
   window: number;
 };
 
+export type TradesSummary = {
+  n_trades: number;
+  n_wins?: number;
+  n_losses?: number;
+  win_rate?: number;
+  avg_win?: number;
+  avg_loss?: number;
+  payoff_ratio?: number;
+  total_pnl?: number;
+  median_duration_hours?: number;
+};
+
 export type TradesPayload = {
   iter: number;
-  summary: {
-    n_trades: number;
-    n_wins?: number;
-    n_losses?: number;
-    win_rate?: number;
-    avg_win?: number;
-    avg_loss?: number;
-    payoff_ratio?: number;
-    total_pnl?: number;
-    median_duration_hours?: number;
+  summary: TradesSummary & {
+    long?: TradesSummary;
+    short?: TradesSummary;
   };
   rows: TradeRow[];
   row_count_total: number;

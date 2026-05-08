@@ -8,9 +8,11 @@ import {
   type StrategyDetail as Detail,
 } from "../api";
 import { fmt, fmtPct, probabilityClass, verdictClass } from "../format";
+import { helpFor } from "../metricsHelp";
 import { EquityChart } from "../components/EquityChart";
 import { DrawdownChart } from "../components/DrawdownChart";
 import { TradesCard } from "../components/TradesCard";
+import { Tooltip } from "../components/Tooltip";
 
 type IterForm = {
   start: string;
@@ -411,7 +413,7 @@ export function StrategyDetail() {
                   <Th>DSR</Th>
                   <Th>note</Th>
                   <Th>finished</Th>
-                  <Th>📊</Th>
+                  <Th help="Open the standalone HTML tear sheet for this iteration in a new tab.">📊</Th>
                 </tr>
               </thead>
               <tbody>
@@ -478,16 +480,24 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 }
 
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
+  const help = helpFor(k);
   return (
     <tr>
-      <th className="text-left text-slate-400 font-medium pr-4 py-1 align-top w-32">{k}</th>
+      <th className="text-left text-slate-400 font-medium pr-4 py-1 align-top w-44">
+        {help ? <Tooltip text={help}>{k}</Tooltip> : k}
+      </th>
       <td className="py-1">{v}</td>
     </tr>
   );
 }
 
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left px-3 py-2 font-medium">{children}</th>;
+function Th({ children, help }: { children: React.ReactNode; help?: string }) {
+  const text = help ?? (typeof children === "string" ? helpFor(children) : undefined);
+  return (
+    <th className="text-left px-3 py-2 font-medium">
+      {text ? <Tooltip text={text}>{children}</Tooltip> : children}
+    </th>
+  );
 }
 
 function Field({

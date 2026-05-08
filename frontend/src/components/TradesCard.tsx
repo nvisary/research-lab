@@ -4,6 +4,8 @@ import factoryImport from "react-plotly.js/factory";
 import Plotly from "plotly.js-basic-dist-min";
 import { api, type TradesPayload, type TradeRow } from "../api";
 import { fmt, fmtPct } from "../format";
+import { helpFor } from "../metricsHelp";
+import { Tooltip } from "./Tooltip";
 
 const createPlotlyComponent =
   (factoryImport as any).default ?? (factoryImport as any);
@@ -153,16 +155,24 @@ function TradeTable({ rows, max }: { rows: TradeRow[]; max?: number }) {
 }
 
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
+  const help = helpFor(k);
   return (
     <tr>
-      <th className="text-left text-slate-400 font-medium pr-4 py-1 align-top w-32">{k}</th>
+      <th className="text-left text-slate-400 font-medium pr-4 py-1 align-top w-32">
+        {help ? <Tooltip text={help}>{k}</Tooltip> : k}
+      </th>
       <td className="py-1 mono">{v}</td>
     </tr>
   );
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left px-2 py-1.5 font-medium">{children}</th>;
+  const text = typeof children === "string" ? helpFor(children) : undefined;
+  return (
+    <th className="text-left px-2 py-1.5 font-medium">
+      {text ? <Tooltip text={text}>{children}</Tooltip> : children}
+    </th>
+  );
 }
 
 function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {

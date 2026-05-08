@@ -295,6 +295,22 @@ for tight loops on already-trusted code.
 **Manual run.** `uv run python -m runner.audit strategies/<name>` prints
 a JSON report and exits with code 2 on lookahead, 3 on non-determinism.
 
+## 10d. Known limitations
+
+The framework has explicit, documented blind spots. Read the
+*Known limitations* section of [README.md](README.md) before you place
+weight on results that depend on them. Summary:
+
+- **Survivorship bias** in the symbol universe — only currently-listed
+  Bybit perps are included. Multi-symbol cross-sectional results are
+  biased upward; single-symbol BTC results are not.
+- **Single shared cash book** under vectorbt's `cash_sharing+group_by`.
+  Fee allocation between symbols is opaque to live reproduction. OK
+  for the pilot, will need a different engine for proper multi-symbol.
+- **Web dashboard is single-user / localhost-only.** Don't expose.
+- **Data root** override via `$RESEARCHLAB_DATA_ROOT`. Each accepted
+  iter records its env in `runs/best.json` for reproducibility.
+
 ## 11. Where the data is
 
 - `data/bybit/perp/1m/<SYMBOL>/<YYYY-MM>.parquet` — OHLCV partitioned by month. Already de-duplicated, sorted, UTC-aligned.

@@ -40,6 +40,56 @@ uv run uvicorn web.app:app --port 8000              # http://localhost:8000/
 
 LLM agents: read [`AGENTS.md`](AGENTS.md) before touching anything. For a catalog of concrete strategy-improvement techniques, see [`METHODS.md`](METHODS.md).
 
+## Known limitations
+
+These are real and documented; numbers will be biased upward by them. They
+will be addressed when justified by the cost/benefit but do not block
+research today.
+
+### Survivorship bias in the symbol universe
+The downloader filters Bybit USDT-perp instruments by their *current*
+listing status; symbols that delisted before today are absent from the
+universe entirely. On a 2024–2026 backtest, this means the only "alts"
+present are the ones that **survived** that period — picking from
+known-good outcomes biases cross-sectional and portfolio strategies
+upward (literature suggests +0.2–0.5 Sharpe on multi-year crypto
+backtests, depending on universe breadth).
+
+Single-symbol BTC strategies are unaffected. Multi-symbol strategies
+that include all available perps are. Treat OOS Sharpe gains from
+adding "obscure" alts with skepticism until we snapshot historical
+listings.
+
+Mitigation when actually needed: maintain a monthly snapshot of
+`/v5/market/instruments-info` and include each symbol only over its
+active lifetime. Out of scope for the current pilot.
+
+### Single shared cash book under cash_sharing + group_by
+The harness wires `vectorbt.Portfolio.from_orders(cash_sharing=True,
+group_by=True, call_seq="auto")`. This means all symbols draw from one
+cash pool and vbt picks an internal order-execution sequence at each
+bar. Fee allocation between legs becomes opaque — useful for
+single-symbol pilots, less faithful for a multi-symbol live account
+where cash availability per symbol is queue-position-dependent.
+
+For now: documented, fine for single-symbol pilots. Expansion to
+event-driven (backtrader / nautilus) for proper multi-symbol cash
+queue is on the M6 backlog.
+
+### Web dashboard — single-user, localhost only
+`web/app.py` runs background subprocess jobs in daemon threads. Killing
+the FastAPI process orphans them; jobs in flight lose their tail buffer.
+There is no auth, no rate limiting, no remote authorization. Bind only
+to `127.0.0.1` in production-grade scenarios. The dashboard is meant as
+a local research console, not a multi-user service.
+
+### Data path & reproducibility
+Set `RESEARCHLAB_DATA_ROOT` if your parquet tree lives outside the repo
+(e.g. on a separate fast disk). Each accepted iter records its env in
+`runs/best.json` (python / package versions / git SHA / dataset
+snapshot mtime); see `harness/env.py`. Cold reproduction requires
+recreating that env.
+
 ## Strategy contract
 
 Each `strategy.py` exports:

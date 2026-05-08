@@ -157,6 +157,9 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--list-symbols", action="store_true")
+    ap.add_argument("--launched-before", default=None,
+                    help="With --all: only symbols whose launchTime < this date (YYYY-MM-DD). "
+                         "Picks out perps with full history coverage of the train window.")
     args = ap.parse_args()
 
     if args.list_symbols:
@@ -172,8 +175,16 @@ def main() -> None:
     if args.symbol:
         symbols = [args.symbol]
     elif args.all:
-        symbols = [s["symbol"] for s in list_perp_symbols()]
-        print(f"Downloading {len(symbols)} symbols, {args.start} → {args.end}")
+        all_perps = list_perp_symbols()
+        if args.launched_before:
+            cutoff_ms = int(datetime.fromisoformat(args.launched_before)
+                            .replace(tzinfo=timezone.utc).timestamp() * 1000)
+            kept = [s for s in all_perps if 0 < s.get("launchTime", 0) < cutoff_ms]
+            print(f"{len(kept)}/{len(all_perps)} perps launched before {args.launched_before}")
+            symbols = [s["symbol"] for s in kept]
+        else:
+            symbols = [s["symbol"] for s in all_perps]
+        print(f"Downloading {len(symbols)} symbols, {args.start} -> {args.end}")
     else:
         ap.error("specify --symbol or --all")
 

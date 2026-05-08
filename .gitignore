@@ -1,0 +1,13 @@
+data/bybit/
+data/meta/
+__pycache__/
+*.pyc
+.venv/
+.env
+uv.lock
+frontend/node_modules/
+frontend/dist/
+strategies/*/runs/*.jsonl
+strategies/*/runs/*.json
+strategies/*/runs/*.py
+!strategies/*/runs/.gitkeep

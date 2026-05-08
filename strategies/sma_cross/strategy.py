@@ -5,14 +5,15 @@ import numpy as np
 import pandas as pd
 
 DEFAULT_SYMBOLS = ["BTCUSDT"]
-DEFAULT_TF = "1h"
+DEFAULT_TF = "4h"
 
 DEFAULT_PARAMS = {
     "fast": 20,
     "slow": 100,
-    "vol_lookback": 168,
+    "vol_lookback": 21,     # ~3.5 days of 4h bars: fast vol response
     "target_daily_vol": 0.02,
-    "cooldown_bars": 6,    # ignore signal flips within N bars of last flip
+    "cooldown_bars": 0,
+    "bars_per_day": 6,      # 24h / 4h
 }
 
 PARAM_SPACE = {
@@ -40,7 +41,8 @@ def generate_signals(data: dict[str, pd.DataFrame], params: dict) -> pd.DataFram
         close = df["close"]
         sma_fast = close.rolling(fast).mean()
         sma_slow = close.rolling(slow).mean()
-        direction = (sma_fast > sma_slow).astype(float) * 2 - 1   # ±1
+        # Long-only at 4h: BTC has structural long bias; shorts pay funding+drift
+        direction = (sma_fast > sma_slow).astype(float)  # 0 or 1
 
         # Cooldown: take new direction only if it's been the same for >= cooldown_bars
         # i.e., reject 'flicker' flips. Implemented as: a flip is committed only after
@@ -54,7 +56,7 @@ def generate_signals(data: dict[str, pd.DataFrame], params: dict) -> pd.DataFram
             committed = direction
 
         ret = close.pct_change()
-        realized_daily_vol = ret.rolling(vol_lookback).std() * np.sqrt(24)
+        realized_daily_vol = ret.rolling(vol_lookback).std() * np.sqrt(int(params.get("bars_per_day", 24)))
         size = (target_daily_vol / realized_daily_vol).clip(upper=1.0).fillna(0.0)
 
         pos = (committed * size).clip(-1.0, 1.0)

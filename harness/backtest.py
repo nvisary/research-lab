@@ -159,6 +159,12 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
 
     adj_returns_full = adj_equity_full.pct_change().fillna(0.0)
 
+    # Equal-weight buy-and-hold benchmark on the same portfolio bars. Computed
+    # unconditionally (cheap) so per-slice summary() can return Sharpe-vs-bench
+    # alpha. Single-symbol strategies see this as that symbol's b&h Sharpe;
+    # multi-symbol strategies see the equal-weighted basket's b&h Sharpe.
+    bench = (prices / prices.iloc[0]).mean(axis=1) * float(adj_equity_full.iloc[0])
+
     out = {}
     for label, lo, hi in [("train", split.train_start, split.train_end),
                            ("oos", split.oos_start, split.oos_end)]:
@@ -167,15 +173,16 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         rets = adj_returns_full[mask]
         positions = target[mask]
         n_trades = int(((entry_times >= lo) & (entry_times < hi)).sum()) if len(entry_times) else 0
-        out[label] = M.summary(equity, rets, positions, n_trades=n_trades, tf=tf)
+        out[label] = M.summary(equity, rets, positions, n_trades=n_trades, tf=tf,
+                                benchmark=bench[mask])
 
     if return_curves:
-        bench = (prices / prices.iloc[0]).mean(axis=1) * float(adj_equity_full.iloc[0])
         out["equity"] = adj_equity_full
         out["raw_equity"] = raw_equity_full
         out["funding_cashflow"] = fcf
         out["benchmark"] = bench
         out["split_cutoff"] = split.train_end
+
         # OOS returns slice — used by iterate.py to compute DSR/PSR/CI on the
         # same series as composite, post-funding-adjustment.
         oos_mask = (adj_equity_full.index >= split.oos_start) & \
@@ -261,8 +268,15 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
     if walk_windows > 1:
         windows = []
         wf_curves: list[dict] = []
-        for sp in walk_forward(period_start, period_end, n_windows=walk_windows):
+        wf_splits = walk_forward(period_start, period_end, n_windows=walk_windows)
+        for i, sp in enumerate(wf_splits):
+            print(f"[wf] window {i+1}/{len(wf_splits)} "
+                  f"({sp.train_start.date()} -> {sp.oos_end.date()}) running...",
+                  flush=True)
             w = run_split(mod, p, symbols, sp, tf=tf, return_curves=return_curves)
+            oos_sh = (w.get("oos") or {}).get("sharpe", 0.0)
+            print(f"[wf] window {i+1}/{len(wf_splits)} done -- OOS Sharpe {oos_sh:+.3f}",
+                  flush=True)
             if return_curves and "equity" in w:
                 wf_curves.append({
                     "equity": w.pop("equity"),

@@ -242,10 +242,14 @@ def api_equity(name: str, iter_id: int):
 
 
 class IterateRequest(BaseModel):
-    start: str = "2025-01-01"
-    end: str = "2025-02-01"
-    tf: str = "1h"
-    walk: int = 0
+    start: str = "2024-01-01"
+    end: str = "2025-10-01"
+    # None means defer to strategy.py:DEFAULT_TF. Hard-coded "1h" here was
+    # a real bug — it silently overrode 4h/15m strategies, breaking the
+    # entire run because vol_lookback / bars_per_day were calibrated for
+    # the strategy's intended TF.
+    tf: str | None = None
+    walk: int = 4
     note: str = ""
 
 
@@ -257,10 +261,13 @@ def api_iterate(name: str, body: IterateRequest):
         f"strategies/{name}",
         "--start", body.start,
         "--end", body.end,
-        "--tf", body.tf,
         "--walk", str(body.walk),
         "--note", body.note,
     ]
+    # Only forward --tf when explicitly provided. Otherwise iterate.py reads
+    # DEFAULT_TF from strategy.py.
+    if body.tf:
+        cmd.extend(["--tf", body.tf])
     job = _start_job(cmd)
     return job.to_json()
 
@@ -288,23 +295,33 @@ def api_trades(name: str, iter_id: int):
     df = pd.read_parquet(p)
     n_total = len(df)
 
-    if "pnl_quote" in df.columns and not df.empty:
-        wins = df[df["pnl_quote"] > 0]
-        losses = df[df["pnl_quote"] < 0]
-        summary = {
-            "n_trades": n_total,
+    def _summarize(sub: pd.DataFrame) -> dict:
+        n = len(sub)
+        if n == 0 or "pnl_quote" not in sub.columns:
+            return {"n_trades": int(n)}
+        wins = sub[sub["pnl_quote"] > 0]
+        losses = sub[sub["pnl_quote"] < 0]
+        return {
+            "n_trades": int(n),
             "n_wins": int(len(wins)),
             "n_losses": int(len(losses)),
-            "win_rate": float(len(wins) / n_total) if n_total else 0.0,
+            "win_rate": float(len(wins) / n) if n else 0.0,
             "avg_win": float(wins["pnl_quote"].mean()) if len(wins) else 0.0,
             "avg_loss": float(losses["pnl_quote"].mean()) if len(losses) else 0.0,
             "payoff_ratio": (float(wins["pnl_quote"].mean() / -losses["pnl_quote"].mean())
                              if len(wins) and len(losses) else 0.0),
-            "total_pnl": float(df["pnl_quote"].sum()),
-            "median_duration_hours": float(df.get("duration_hours", pd.Series([0.0])).median()),
+            "total_pnl": float(sub["pnl_quote"].sum()),
+            "median_duration_hours": float(sub.get("duration_hours", pd.Series([0.0])).median()),
         }
-    else:
-        summary = {"n_trades": n_total}
+
+    summary = _summarize(df)
+    # Per-side breakdown so the user can see whether longs and shorts
+    # contributed equally to PnL or one side carried the strategy.
+    if "direction" in df.columns and not df.empty:
+        long_df = df[df["direction"].astype(str).str.lower().str.startswith("long")]
+        short_df = df[df["direction"].astype(str).str.lower().str.startswith("short")]
+        summary["long"] = _summarize(long_df)
+        summary["short"] = _summarize(short_df)
 
     head = df.sort_values("pnl_quote", ascending=False, na_position="last").head(20) \
         if "pnl_quote" in df.columns else df.head(20)
@@ -334,7 +351,10 @@ def api_trades(name: str, iter_id: int):
 class HoldoutRequest(BaseModel):
     start: str = "2025-10-01"
     end: str = "2026-05-01"
-    tf: str = "1h"
+    # tf=None means "read DEFAULT_TF from strategy.py". Hard-coded "1h" here
+    # was a real bug — it silently overrode strategies that declared 4h/15m/etc.
+    # and the holdout report came back as nonsense.
+    tf: str | None = None
 
 
 @app.post("/api/strategies/{name}/holdout")
@@ -345,8 +365,9 @@ def api_holdout(name: str, body: HoldoutRequest):
         f"strategies/{name}",
         "--start", body.start,
         "--end", body.end,
-        "--tf", body.tf,
     ]
+    if body.tf:
+        cmd.extend(["--tf", body.tf])
     return _start_job(cmd).to_json()
 
 

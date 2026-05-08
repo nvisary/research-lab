@@ -25,12 +25,14 @@ type IterForm = {
 const defaultForm: IterForm = {
   start: "2024-01-01",
   end: "2025-10-01",
-  tf: "1h",
+  // Empty string => backend defers to strategy.py:DEFAULT_TF. The user can
+  // override by typing a value here.
+  tf: "",
   walk: 4,
   note: "",
 };
 
-const HOLDOUT = { start: "2025-10-01", end: "2026-05-01", tf: "1h" };
+const HOLDOUT = { start: "2025-10-01", end: "2026-05-01", tf: "" };
 
 export function StrategyDetail() {
   const { name = "" } = useParams();
@@ -46,25 +48,50 @@ export function StrategyDetail() {
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" }>({
     key: "iter", dir: "desc",
   });
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const pollTimer = useRef<number | null>(null);
   const holdoutPollTimer = useRef<number | null>(null);
+  const autoRefreshTimer = useRef<number | null>(null);
 
   const load = useCallback(async () => {
+    setRefreshing(true);
     try {
-      const d = await api.strategy(name);
+      const [d, h] = await Promise.all([
+        api.strategy(name),
+        api.holdoutReport(name).catch(() => null),
+      ]);
       setDetail(d);
+      setHoldout(h);
       if (d.history.length > 0) {
         setSelectedIter((prev) => prev ?? d.history[d.history.length - 1].iter);
       }
     } catch (e) {
       setError(String(e));
+    } finally {
+      setRefreshing(false);
     }
   }, [name]);
 
   useEffect(() => {
     load();
-    api.holdoutReport(name).then(setHoldout).catch(() => setHoldout(null));
-  }, [load, name]);
+  }, [load]);
+
+  // Optional auto-refresh: re-fetch detail every 5s while enabled.
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const tick = () => {
+      load();
+      autoRefreshTimer.current = window.setTimeout(tick, 5000);
+    };
+    autoRefreshTimer.current = window.setTimeout(tick, 5000);
+    return () => {
+      if (autoRefreshTimer.current) {
+        window.clearTimeout(autoRefreshTimer.current);
+        autoRefreshTimer.current = null;
+      }
+    };
+  }, [autoRefresh, load]);
 
   // Load equity curves whenever selection or overlay flag changes.
   useEffect(() => {
@@ -201,12 +228,32 @@ export function StrategyDetail() {
   const best = detail.best;
   return (
     <>
-      <h1 className="text-2xl font-semibold mb-4">
-        <Link to="/" className="text-slate-400 hover:text-slate-100">
-          strategies
-        </Link>{" "}
-        / <span>{name}</span>
-      </h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-semibold">
+          <Link to="/" className="text-slate-400 hover:text-slate-100">
+            strategies
+          </Link>{" "}
+          / <span>{name}</span>
+        </h1>
+        <div className="flex items-center gap-3">
+          <label className="text-xs text-slate-400 inline-flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+            />
+            auto-refresh (5s)
+          </label>
+          <button
+            onClick={() => load()}
+            disabled={refreshing}
+            className="text-xs px-3 py-1.5 rounded border border-edge bg-slate-800 hover:bg-slate-700 disabled:opacity-50"
+            title="Re-fetch best.json, history, equity, holdout. Use after a long-running iter completes."
+          >
+            {refreshing ? "refreshing…" : "↻ refresh"}
+          </button>
+        </div>
+      </div>
 
       <Card title="Best">
         {!best ? (
@@ -252,6 +299,34 @@ export function StrategyDetail() {
                       </>
                     }
                   />
+                  {best.wf_aggregate.mean_alpha_sharpe !== null && best.wf_aggregate.mean_alpha_sharpe !== undefined && (
+                    <KV
+                      k="WF alpha (vs b&h)"
+                      v={
+                        <>
+                          <strong className={
+                            best.wf_aggregate.mean_alpha_sharpe > 0.1
+                              ? "text-emerald-400"
+                              : best.wf_aggregate.mean_alpha_sharpe < -0.1
+                                ? "text-rose-400"
+                                : "text-amber-400"
+                          }>
+                            {fmt(best.wf_aggregate.mean_alpha_sharpe)}
+                          </strong>
+                          {" "}sharpe
+                          {" "}<span className="text-slate-500">
+                            (b&h mean {fmt(best.wf_aggregate.mean_bench_sharpe)})
+                          </span>
+                          {best.wf_aggregate.window_alphas && (
+                            <div className="text-xs text-slate-500 mono mt-0.5">
+                              per-window: [{best.wf_aggregate.window_alphas
+                                .map((a) => a == null ? "—" : a.toFixed(2)).join(", ")}]
+                            </div>
+                          )}
+                        </>
+                      }
+                    />
+                  )}
                   <KV
                     k="WF CAGR"
                     v={
@@ -406,7 +481,9 @@ export function StrategyDetail() {
             <input
               value={form.tf}
               onChange={(e) => setForm({ ...form, tf: e.target.value })}
-              className="input w-16"
+              placeholder={detail.best?.tf || "auto"}
+              title="Empty = use strategy.py:DEFAULT_TF. Override here only if you know what you're doing."
+              className="input w-20"
             />
           </Field>
           <Field label="walk">

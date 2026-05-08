@@ -119,7 +119,8 @@ def hit_rate(returns: pd.Series) -> float:
 
 
 def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
-            n_trades: int, tf: str | None = None) -> dict:
+            n_trades: int, tf: str | None = None,
+            benchmark: pd.Series | None = None) -> dict:
     # PSR is computed inline; DSR (which needs n_trials) is added by the caller.
     from harness.stats import psr as _psr, bootstrap_sharpe_ci as _ci
     sh = sharpe(returns, tf=tf)
@@ -129,8 +130,13 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
                         if len(returns.dropna()) >= 100 else (sh, sh))
     except Exception:
         ci_lo, ci_hi = sh, sh
+    bench_sh: float | None = None
+    if benchmark is not None and len(benchmark.dropna()) > 1:
+        bench_sh = float(sharpe(benchmark.pct_change(), tf=tf))
     return {
         "sharpe": sh,
+        "bench_sharpe": bench_sh,
+        "alpha_sharpe": (sh - bench_sh) if bench_sh is not None else None,
         "sortino": sortino(returns, tf=tf),
         "calmar": calmar(equity),
         "cagr": cagr(equity),
@@ -209,6 +215,10 @@ def aggregate_wf_composite(window_metrics: list[dict],
     trades = [m.get("n_trades", 0) for m in window_metrics]
     cagrs = [m.get("cagr", 0.0) for m in window_metrics]
     total_returns = [m.get("total_return", 0.0) for m in window_metrics]
+    bench_sharpes = [m.get("bench_sharpe") for m in window_metrics]
+    alphas = [m.get("alpha_sharpe") for m in window_metrics]
+    bench_sharpes_clean = [s for s in bench_sharpes if s is not None]
+    alphas_clean = [a for a in alphas if a is not None]
     return score, {
         "mean_sharpe": float(np.mean(sharpes)),
         "std_sharpe": float(np.std(sharpes, ddof=0)),
@@ -219,6 +229,10 @@ def aggregate_wf_composite(window_metrics: list[dict],
         "mean_cagr": float(np.mean(cagrs)),
         "median_cagr": float(np.median(cagrs)),
         "mean_total_return": float(np.mean(total_returns)),
+        "mean_bench_sharpe": float(np.mean(bench_sharpes_clean)) if bench_sharpes_clean else None,
+        "mean_alpha_sharpe": float(np.mean(alphas_clean)) if alphas_clean else None,
+        "median_alpha_sharpe": float(np.median(alphas_clean)) if alphas_clean else None,
+        "window_alphas": alphas,
         "n_windows": len(window_metrics),
         "window_composites": composites,
     }

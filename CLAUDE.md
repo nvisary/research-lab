@@ -34,6 +34,8 @@ When the user says "iterate on `<strategy_name>`" or similar:
 ## Rules you cannot break
 
 - Edit only `strategies/<name>/strategy.py` and `strategies/<name>/program.md`.
+  Both are part of your workspace: `program.md` is your hypothesis log and
+  "what's been ruled out" notebook — keep it current as iterations refute ideas.
 - Never touch `harness/`, `runner/`, `datafeed/`, `web/`, `frontend/`, `tests/`.
   If a harness bug seems likely, **report it to the user**, don't patch it.
 - Never look at the holdout (`strategies/<name>/runs/holdout/`) or run

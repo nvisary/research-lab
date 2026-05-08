@@ -7,6 +7,8 @@ export type StrategySummary = {
 
 export type Metrics = {
   sharpe?: number;
+  bench_sharpe?: number | null;
+  alpha_sharpe?: number | null;
   sortino?: number;
   calmar?: number;
   max_dd?: number;
@@ -93,6 +95,10 @@ export type WfAggregate = {
   mean_cagr?: number;
   median_cagr?: number;
   mean_total_return?: number;
+  mean_bench_sharpe?: number | null;
+  mean_alpha_sharpe?: number | null;
+  median_alpha_sharpe?: number | null;
+  window_alphas?: (number | null)[];
   n_windows: number;
   window_composites?: number[];
 } | null;

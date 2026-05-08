@@ -1,8 +1,10 @@
 """Strategy-side utilities.
 
-Currently exports:
+Exports:
   resample_higher — multi-timeframe helper that automatically applies the
   one-bar shift required to keep higher-TF signals lookahead-safe.
+  bars_per_day — convert a TF string ("1h", "4h", "5min") into the number
+  of bars per day, useful for vol-target sizing.
 
 These helpers are imported BY strategies. They are part of the public
 contract: edits to them can break user code, so treat them as semver.
@@ -12,6 +14,43 @@ from __future__ import annotations
 from typing import Mapping
 
 import pandas as pd
+
+
+_BARS_PER_DAY_TABLE: dict[str, float] = {
+    "1min":  1440.0,
+    "5min":  288.0,
+    "15min": 96.0,
+    "30min": 48.0,
+    "1h":    24.0,
+    "2h":    12.0,
+    "4h":    6.0,
+    "6h":    4.0,
+    "8h":    3.0,
+    "12h":   2.0,
+    "1d":    1.0,
+}
+
+
+def bars_per_day(tf: str) -> float:
+    """Number of bars in 24h for a given timeframe alias.
+
+    Useful for vol-target sizing (``realized_daily_vol = ret.rolling(N).std() *
+    sqrt(bars_per_day(DEFAULT_TF))``) so a strategy that switches TF doesn't
+    silently misuse the annualization factor.
+
+    Falls back to ``pd.Timedelta`` parsing for non-canonical aliases.
+    Returns 24.0 if unparseable, on the assumption that 1h is the most
+    common decision TF.
+    """
+    if tf in _BARS_PER_DAY_TABLE:
+        return _BARS_PER_DAY_TABLE[tf]
+    try:
+        secs = pd.Timedelta(tf).total_seconds()
+        if secs > 0:
+            return 86400.0 / secs
+    except Exception:
+        pass
+    return 24.0
 
 
 def resample_higher(

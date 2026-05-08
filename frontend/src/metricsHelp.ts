@@ -42,6 +42,13 @@ export const HELP: Record<string, string> = {
     "Compound Annual Growth Rate per WF window, then averaged across windows. " +
     "Annualizes the OOS slice — answers 'if we ran this strategy with $10k for a year, what would it earn'. " +
     "Mean and median are reported because a single short OOS slice can give a noisy CAGR.",
+  "WF alpha (vs b&h)":
+    "Mean strategy Sharpe minus equal-weight buy-and-hold Sharpe across WF " +
+    "windows. Positive = the strategy outperforms passively holding the same " +
+    "universe; negative = the strategy is leveraged b&h with extra steps. " +
+    "On a single-asset trend follower in a strong up-trend, OOS Sharpe can be " +
+    "+5 while alpha is ~0 because b&h itself is +5. Always check this number " +
+    "before trusting raw Sharpe.",
   "WF return / window":
     "Mean total return inside each window's OOS slice (not annualized). " +
     "Each WF window is a self-contained backtest with its own $10k init, so this is the typical " +

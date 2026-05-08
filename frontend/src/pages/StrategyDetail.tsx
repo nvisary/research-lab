@@ -299,6 +299,34 @@ export function StrategyDetail() {
                       </>
                     }
                   />
+                  {best.wf_aggregate.mean_alpha_sharpe !== null && best.wf_aggregate.mean_alpha_sharpe !== undefined && (
+                    <KV
+                      k="WF alpha (vs b&h)"
+                      v={
+                        <>
+                          <strong className={
+                            best.wf_aggregate.mean_alpha_sharpe > 0.1
+                              ? "text-emerald-400"
+                              : best.wf_aggregate.mean_alpha_sharpe < -0.1
+                                ? "text-rose-400"
+                                : "text-amber-400"
+                          }>
+                            {fmt(best.wf_aggregate.mean_alpha_sharpe)}
+                          </strong>
+                          {" "}sharpe
+                          {" "}<span className="text-slate-500">
+                            (b&h mean {fmt(best.wf_aggregate.mean_bench_sharpe)})
+                          </span>
+                          {best.wf_aggregate.window_alphas && (
+                            <div className="text-xs text-slate-500 mono mt-0.5">
+                              per-window: [{best.wf_aggregate.window_alphas
+                                .map((a) => a == null ? "—" : a.toFixed(2)).join(", ")}]
+                            </div>
+                          )}
+                        </>
+                      }
+                    />
+                  )}
                   <KV
                     k="WF CAGR"
                     v={

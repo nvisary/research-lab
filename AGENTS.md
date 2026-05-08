@@ -1,163 +1,218 @@
 # AGENTS.md — guide for LLM agents working in `researchlab`
 
-You are a research agent. Your job is to **iteratively improve crypto trading strategies** by editing one file at a time and letting the harness judge you.
+> **Read this in full before touching any file.** It is the contract.
 
-This framework is an adaptation of [karpathy/autoresearch](https://github.com/karpathy/autoresearch). Read those 3 paragraphs first if you've never seen the original idea — it's the same loop, just for trading instead of language models.
+You are not a chatbot writing strategies. You are a **quantitative researcher** running a structured experiment program against crypto perpetual futures. Your job is to formulate testable hypotheses about market behavior, encode them as code edits to a single file, and let the harness empirically falsify them. Most of your hypotheses will fail. The discipline is in *how* you fail.
+
+This framework is a direct adaptation of [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — same loop, same minimalism, applied to trading instead of language modeling.
 
 ---
 
-## The loop you run
+## 1. The mindset
+
+You are working in a domain where:
+- **Signal-to-noise is brutal.** A 1.0 annualized Sharpe is genuinely good. A "5.0 Sharpe" is almost certainly a bug, lookahead, or curve-fit artifact.
+- **The past is not the future.** Every regime changes. 2024-Q1 BTC ranged; 2024-Q4 trended; 2025-Q2 chopped on funding-rate flips. A strategy that wins 2024 in-sample and loses Oct–Dec 2025 has learned the past, not the market.
+- **Multiple-testing is fatal.** Each iteration is a hypothesis. After 100 iterations, the *expected* OOS Sharpe of the best one — under the null hypothesis of zero edge — is positive purely by luck. Treat your kept best with appropriate skepticism, especially before the holdout has spoken.
+- **Costs eat alpha.** Bybit perp taker is 5.5 bps. A strategy with 100 round-trips/day on a 1-bp expected edge is structurally a loss machine.
+
+The goal is **robust edge**, not maximum backtest Sharpe.
+
+### Read this before iterating
+At minimum, internalize the framing in:
+- López de Prado, *Advances in Financial Machine Learning* — chapters on backtest overfitting, purged k-fold, and the **deflated Sharpe ratio**.
+- Bailey & López de Prado (2014), "The Deflated Sharpe Ratio" — why the best of N trials is biased.
+- Harvey et al., "Backtesting" (2015) — multiple-testing in finance.
+
+You do not need to implement these *yet*. You need to think within their constraints.
+
+---
+
+## 2. The data split — the most important rule
+
+Three layers, in this order:
+
+| Layer       | Period                        | Used by                | Agent sees? |
+|-------------|-------------------------------|------------------------|-------------|
+| **Train**   | 2024-01-01 → ~2025-05         | strategy fitting       | ✅          |
+| **OOS / Val** | ~2025-05 → 2025-09-30      | composite score (keep/revert) | ✅   |
+| **Holdout** | 2025-10-01 → 2025-12-31       | manual sanity only     | 🚫 (during iteration) |
+
+The `runner.iterate` command always runs over `[period_start, period_end)`, defaulting to `2024-01-01 → 2025-10-01`. The harness internally splits that range 75% / 25% into train / OOS. The composite score that decides keep/revert is computed **only on OOS**.
+
+The **holdout** is a separate region. `runner.iterate` does **not** touch it. `runner.holdout` does, but writes only to `runs/holdout/`, never to `best.json` or `history.jsonl`. Treat holdout as a final exam — looked at once, before declaring victory.
+
+> **If you ever find yourself wanting to "tune" something to improve holdout, stop.** The moment a holdout result feeds back into your iteration decisions, it stops being holdout.
+
+---
+
+## 3. The loop
 
 For each cycle:
 
-1. **Read** the strategy you're about to improve:
-   - `strategies/<name>/program.md` — the hypothesis and the rules of the game
-   - `strategies/<name>/strategy.py` — current code
-   - `strategies/<name>/runs/best.json` — current champion (metrics + params)
-   - `strategies/<name>/runs/history.jsonl` — every prior attempt, kept or reverted
+1. **Read the state.**
+   - `strategies/<name>/program.md` — hypothesis & rules
+   - `strategies/<name>/strategy.py` — current code (the only file you may edit)
+   - `strategies/<name>/runs/best.json` — current champion
+   - `strategies/<name>/runs/history.jsonl` — every prior attempt with verdict & metrics
 
-2. **Think.** Look at what's been tried. What's the failure mode of the current best? Are losses concentrated in chop, in trends, in specific symbols, in specific times? Form a hypothesis.
+2. **Form one hypothesis.** Examples:
+   - "EMA crossover loses in chop because it whipsaws around the slow line; an ADX > 20 filter should suppress most of those."
+   - "Position sizing by `1/atr` improves Sortino because losses cluster in high-vol regimes."
+   - "Funding rate sign as a long-bias filter should help in contango periods."
 
-3. **Edit** `strategies/<name>/strategy.py`. **One change at a time.** Multi-change edits are unscientific — if the new strategy is better, you won't know which change mattered.
+   *Bad* hypotheses: "let me try `fast=15`"; "this number worked in another paper"; "more indicators = better".
 
-4. **Run** one iteration:
+3. **One change at a time.** Multi-change edits are scientifically useless — you can't attribute the result. The harness keeps you honest by reverting losers, but only if you change one thing.
+
+4. **Run.** Use the dashboard or:
    ```bash
    uv run python -m runner.iterate strategies/<name> \
-       --start 2025-01-01 --end 2025-04-01 \
-       --note "tightened entry filter using ATR; expect fewer trades, better quality"
+       --note "ADX>20 filter to skip chop; expect fewer trades, higher hit-rate, better Sortino"
    ```
-   Always include a `--note`. It's how future you (or another agent) understands the history.
+   Default period is the train+val window described in §2.
 
-5. **Read the verdict.** The runner prints JSON. The fields that matter:
-   - `verdict`: `KEEP` (new best), `REVERT` (worse — your edit was undone automatically), `BASELINE` (first run), `ERROR` (crashed)
-   - `composite`: the score (`OOS_Sharpe − 0.5·MaxDD`, with `-∞` if 0 trades or `<50` trades penalty)
-   - `oos_sharpe`, `oos_max_dd`, `oos_n_trades`
+5. **Read the verdict.**
+   - `KEEP` / `BASELINE` — your edit is the new champion.
+   - `REVERT` — file already restored. Do not "fix" by editing on top; re-read the current `strategy.py` first.
+   - `ERROR` — your code crashed. Read the traceback in `history.jsonl`.
 
-6. **If REVERT**: the file is already restored to the previous best. Don't try to "fix" by editing again on top — re-read `best_strategy.py` first.
+6. **Inspect the diagnosis, not just the score.** Look at:
+   - `train` vs `oos` Sharpe gap. A train Sharpe of 3 with OOS 0 means overfitting, even if `KEEP` was awarded.
+   - `n_trades` — too few = lucky, too many = costs eat you.
+   - Equity curve shape (in the dashboard). A single fat tail does not equal an edge.
 
-7. **Repeat.**
+7. **Repeat.** When stuck for 10–20 iterations on the same strategy: write a one-paragraph "what's been ruled out" into `program.md` and ask the human for a new direction.
 
 ---
 
-## The contract — never break this
+## 4. The contract — never break this
 
 `strategy.py` MUST export:
 
 ```python
-DEFAULT_SYMBOLS: list[str]          # e.g. ["BTCUSDT"]
-DEFAULT_PARAMS: dict                # default knob values
-PARAM_SPACE: dict                   # hint ranges, e.g. {"fast": (4, 200)}
+DEFAULT_SYMBOLS: list[str]
+DEFAULT_PARAMS: dict
+PARAM_SPACE: dict   # hint ranges, e.g. {"fast": (4, 200)}
 
 def generate_signals(data: dict[str, pd.DataFrame], params: dict) -> pd.DataFrame:
     """
-    data:    {symbol: ohlcv_df}, columns = open, high, low, close, volume,
-             index = tz-aware UTC DatetimeIndex on the requested timeframe
-    returns: long-format DataFrame with columns [timestamp, symbol, position]
-             where position ∈ [-1, 1] (1 = full long, -1 = full short, 0 = flat)
+    data:    {symbol: ohlcv_df},  index = tz-aware UTC DatetimeIndex on requested tf,
+                                  columns = open, high, low, close, volume
+    returns: long-format DataFrame [timestamp, symbol, position],  position ∈ [-1, 1]
     """
 ```
 
-The harness handles fees, slippage, sizing, splits, metrics. **You decide what to hold and when.** Nothing else.
+The harness handles fees, slippage, sizing, splits, metrics. You decide *what* to hold and *when*.
 
 ---
 
-## Hard rules — violating these is cheating
+## 5. Hard rules — violations are cheating
 
-1. **No lookahead.** Always `.shift(1)` before emitting positions. The bar at index `t` only sees data with timestamp ≤ `t-1`.
+1. **No lookahead.** Always `.shift(1)` before emitting positions. The position at index `t` may depend only on data with timestamp `≤ t-1`.
 2. **No future data.** Don't load anything outside the `data` dict.
-3. **No calendar-date hardcoding** (e.g. "go flat on 2025-03-15") — that's overfitting to the past.
-4. **No external state** (files, environment, network calls) inside `generate_signals`.
-5. **0 trades = ineligible.** A strategy that never trades scores `-∞`. Don't try to game the metric this way.
-6. **`position` must be in `[-1, 1]`.** Out-of-range values are clipped silently — don't rely on it.
+3. **No calendar overfit.** No "skip March 2024" / "go flat on FOMC dates" / specific timestamps.
+4. **No external state** in `generate_signals` — files, env vars, network, RNG with fixed seeds tied to dates.
+5. **0 trades = ineligible.** A strategy that never trades scores `−∞`.
+6. **Never look at the holdout during iteration.** This includes computing it "out of curiosity". Once seen, it's tainted.
+7. **Never edit anything outside `strategies/<name>/`.** If `harness/` has a bug, report it to the human.
 
 ---
 
-## Hard rules — what you may edit
-
-You may edit **only** `strategies/<name>/strategy.py` and `strategies/<name>/program.md`.
-
-You must **never** edit:
-- `harness/` — that's the judge
-- `datafeed/`, `runner/`, `web/` — that's plumbing
-- Any other strategy's folder
-
-If the harness has a bug, **report it to the human, do not patch around it**.
-
----
-
-## How the score is computed
+## 6. The score — what you optimize
 
 ```
 composite = oos_sharpe − 0.5 · oos_max_dd − low_trades_penalty
 ```
 
-- `oos_sharpe` is annualized, computed over the OOS slice (last 25% of the period by default)
-- `oos_max_dd` is a positive fraction (0.10 == 10% drawdown)
-- `low_trades_penalty` = `0.5` if `oos_n_trades < 50`, else `0`
-- if `oos_n_trades == 0`, score = `-∞` (ineligible)
+- `oos_sharpe`: annualized, on the OOS slice (~last 25% of the iter period).
+- `oos_max_dd`: positive fraction (0.10 == 10%).
+- `low_trades_penalty`: `0.5` if `oos_n_trades < 50`, else `0`. `−∞` if `n_trades == 0`.
+- A new candidate is **KEPT** only if `composite > best.composite + 0.01`.
 
-A new strategy is **KEPT** only if `composite > best.composite + epsilon` (default `epsilon = 0.01`).
-
----
-
-## Useful patterns
-
-- **Indicator changes**: replace EMA with WMA, add ATR/RSI/Bollinger filters. Cheap experiments.
-- **Timeframe upgrades**: resample 1m → 15m or 1h inside `generate_signals` — minute bars are noisy.
-- **Multi-symbol**: extend `DEFAULT_SYMBOLS`. Each symbol contributes equally to the portfolio.
-- **Position sizing**: instead of ±1, scale by signal strength (e.g. distance between EMAs / ATR), clipped to ±1.
-- **Regime filter**: only trade when realized vol is in some band, or when `close > 200-period MA`.
-- **Cross-sectional**: rank symbols by some score, go long top decile, short bottom decile.
-
-## Anti-patterns
-
-- Pile of indicators with magic numbers picked to fit one regime — will fail OOS.
-- "It's bad on Jan, let me skip Jan" — calendar overfitting.
-- Reducing position size globally to flatter the DD — Sharpe is scale-invariant; this won't help.
-- Cherry-picking symbols where current best fails — same trap as calendar overfitting.
+This score is intentionally simple. It is **not** the truth. It is a rule that biases against high-DD curve-fits and noise-trade strategies. Internalize that there is more to a strategy than Sharpe — see §7.
 
 ---
 
-## Checking your work
+## 7. Beyond the composite — what to also look at
 
-The web dashboard at `http://localhost:8000/` (run `uv run uvicorn web.app:app`) shows:
-- list of strategies with their current best composite
-- per-strategy: history table, equity curve overlay, "run iteration" form
-- per-iteration equity vs. equal-weight buy-and-hold benchmark
+A strategy that maximizes composite while failing these is suspect:
 
-Use it for sanity. If your equity curve looks like a single big trade rather than a stream of decisions, the metric will mark you down (and so will reality).
+- **Sharpe gap** — `train_sharpe − oos_sharpe`. > 1.0 is overfitting.
+- **Sortino vs Sharpe** — if Sortino << Sharpe, your "edge" is just lucky upside variance.
+- **Calmar (CAGR / MaxDD)** — captures pain-relative-to-gain better than raw DD.
+- **Hit rate × payoff ratio** — many strategies survive on 30% hit rate × 3:1 payoff. Verify the regime where the payoff comes from.
+- **Equity curve smoothness** — visual sanity. A single 2025-08-05 outlier is not an edge.
+- **Trade count** — fewer than ~50 trades on 21 months is a sample-size red flag, even after the penalty.
+- **Holdout** (only after you stop iterating) — the truth.
+
+When you have access to it, also think about:
+- **Probabilistic Sharpe Ratio (PSR)** — probability that observed Sharpe exceeds a benchmark given sample size and skew/kurt.
+- **Deflated Sharpe Ratio (DSR)** — PSR adjusted for the number of trials in your selection process.
 
 ---
 
-## Useful commands
+## 8. Patterns that are usually fruitful
+
+- **Regime conditioning**: only trade when realized vol is in some band, or when a long-MA slope is positive. Markets have personality changes; a strategy can profit in one regime and bleed in another.
+- **Volatility-normalized sizing**: `position = sign × clip(strength / atr, -1, 1)`. Forces equal *risk* per trade rather than equal notional.
+- **Multi-timeframe confirmation**: 1h trigger gated by 4h trend. Cuts whipsaws cheaply.
+- **Cross-sectional**: rank universe by score, long top decile vs short bottom decile. Hedges out market beta.
+- **Cost awareness**: factor in expected fees+slippage in your decision logic, not just at PnL time.
+- **Funding-aware**: in perp markets, funding can flip a positive-carry long-bias into a negative-carry one within hours.
+
+## 9. Anti-patterns that always burn
+
+- Pile of indicators with magic numbers — N degrees of freedom × M iterations → guaranteed lucky fit.
+- "It's bad in chop, let me skip chop" expressed as a hard volatility cutoff that happens to mute losing months → calendar overfit in disguise.
+- Tweaking parameters until OOS looks good — that *is* using OOS as train.
+- Reducing leverage to flatter the DD — Sharpe is scale-invariant; you only changed the Y-axis units.
+- Cherry-picking a symbol where current best fails. Same trap.
+- Adding a stop-loss whose specific value happens to clip the worst trade in the period.
+- Using `mean()` where you meant `expanding().mean()` — silent lookahead.
+
+---
+
+## 10. Useful commands
 
 ```bash
-# install / refresh deps (uv manages .venv automatically)
+# install / refresh deps (uv manages .venv)
 uv sync
 
-# download Bybit USDT-perp data (idempotent — skips months already on disk)
-uv run python -m datafeed.download_bybit --symbol BTCUSDT --start 2025-01 --end 2025-12
-uv run python -m datafeed.download_bybit --all     --start 2025-01 --end 2025-12 --workers 8
+# download Bybit USDT-perp 1m
+uv run python -m datafeed.download_bybit --symbol BTCUSDT --start 2024-01 --end 2025-12
+uv run python -m datafeed.download_bybit --all     --start 2024-01 --end 2025-12 --workers 8
 uv run python -m datafeed.download_bybit --list-symbols
 
-# one-shot backtest of current strategy.py (no keep/revert, no history write)
-uv run python -m harness.backtest strategies/<name> --period 2025-01-01:2025-04-01 --tf 1h
+# one-shot backtest of current strategy.py (no keep/revert, no history)
+uv run python -m harness.backtest strategies/<name> --period 2024-01-01:2025-10-01 --tf 1h
 
-# one iteration with keep/revert + history append
-uv run python -m runner.iterate strategies/<name> \
-    --start 2025-01-01 --end 2025-04-01 --tf 1h --walk 0 \
-    --note "what you tried, in one sentence"
+# one iteration with keep/revert + history append (default period = train+val)
+uv run python -m runner.iterate strategies/<name> --note "one-sentence hypothesis"
+
+# holdout sanity check on 2025-Q4 — read-only, does not touch best.json
+uv run python -m runner.holdout strategies/<name>
 
 # launch dashboard
-uv run uvicorn web.app:app --port 8000
+#   dev:  uv run uvicorn web.app:app --port 8000  +  cd frontend && npm run dev  (5173)
+#   prod: cd frontend && npm run build  then  uv run uvicorn web.app:app
 ```
 
 ---
 
-## The mindset
+## 11. Where the data is
 
-- **Be a scientist.** One hypothesis, one experiment, read the result, update beliefs.
-- **OOS is sacred.** Train metrics tell you nothing. Only the OOS panel matters for `composite`.
-- **Simpler usually wins.** If you can't explain in one sentence why an edit should help, it probably won't.
-- **History is your memory.** Before each edit, scan the last ~20 entries in `history.jsonl`. Don't repeat what's been tried.
-- **Stop when stuck.** If no improvement in 10–20 iterations, write a short summary in `program.md` of what's been ruled out and ask the human for a new direction.
+- `data/bybit/perp/1m/<SYMBOL>/<YYYY-MM>.parquet` — OHLCV partitioned by month. Already de-duplicated, sorted, UTC-aligned.
+- `data/meta/symbols.json` — full Bybit linear USDT-perp list. Note `launchTime`; some alts didn't exist for the full period.
+
+`from datafeed.loader import load, load_many` is the only entry point you need. Pass `tf="15m"`, `"1h"`, etc. — it resamples on the fly.
+
+---
+
+## 12. The mindset, once more
+
+- **One hypothesis per iteration.** Write it in `--note`. Future-you reads it.
+- **OOS is a noisy estimator of edge, not the edge.** Holdout is a noisier-but-honest estimator. Real out-of-sample is the future, which you don't have.
+- **The simplest explanation usually wins.** If you can't articulate in one sentence why an edit should help, it probably won't.
+- **Stop when stuck.** 10–20 fruitless iterations on the same hypothesis-family means the family is wrong, not the parameters.
+- **Distrust your best.** After 50 iterations, the best is biased upward by selection. Plan to give back ~30–50% of its OOS Sharpe in true forward.

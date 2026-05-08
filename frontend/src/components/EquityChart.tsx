@@ -1,8 +1,12 @@
-import createPlotlyComponent from "react-plotly.js/factory";
+import factoryImport from "react-plotly.js/factory";
 // @ts-expect-error — no types for the dist-min bundle
 import Plotly from "plotly.js-basic-dist-min";
 import type { EquityCurve } from "../api";
 
+// Vite/ESM ↔ CJS interop: when react-plotly.js/factory is loaded as CJS,
+// the default export sometimes lands under `.default`.
+const createPlotlyComponent =
+  (factoryImport as any).default ?? (factoryImport as any);
 const Plot = createPlotlyComponent(Plotly);
 
 type Props = {

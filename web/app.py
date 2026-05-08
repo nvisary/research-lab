@@ -242,6 +242,49 @@ def api_iterate(name: str, body: IterateRequest):
     return job.to_json()
 
 
+class HoldoutRequest(BaseModel):
+    start: str = "2025-10-01"
+    end: str = "2026-01-01"
+    tf: str = "1h"
+
+
+@app.post("/api/strategies/{name}/holdout")
+def api_holdout(name: str, body: HoldoutRequest):
+    _strategy_dir(name)
+    cmd = [
+        sys.executable, "-m", "runner.holdout",
+        f"strategies/{name}",
+        "--start", body.start,
+        "--end", body.end,
+        "--tf", body.tf,
+    ]
+    return _start_job(cmd).to_json()
+
+
+@app.get("/api/strategies/{name}/holdout")
+def api_holdout_report(name: str):
+    """Return the most recent holdout report (matched to current best.json iter, if any)."""
+    d = _strategy_dir(name)
+    holdout_dir = d / "runs" / "holdout"
+    if not holdout_dir.exists():
+        return None
+    reports = sorted(holdout_dir.glob("holdout_iter_*.json"))
+    if not reports:
+        return None
+    latest = reports[-1]
+    rep = json.loads(latest.read_text(encoding="utf-8"))
+    parquet = latest.with_suffix(".parquet")
+    curve = None
+    if parquet.exists():
+        df = pd.read_parquet(parquet)
+        curve = {
+            "timestamp": [t.isoformat() for t in pd.to_datetime(df["timestamp"], utc=True)],
+            "equity": df["equity"].tolist(),
+            "benchmark": df["benchmark"].tolist(),
+        }
+    return _sanitize({"report": rep, "equity": curve})
+
+
 @app.get("/api/jobs")
 def api_jobs():
     with JOBS_LOCK:

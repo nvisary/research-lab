@@ -34,8 +34,11 @@ from harness.metrics import composite_score
 # --------------------------------------------------------------------------- #
 @dataclass
 class IterationConfig:
-    period_start: str = "2025-01-01"
-    period_end: str = "2025-04-01"   # short by default — keeps iterations fast
+    # Default split (see AGENTS.md):
+    #   train+val = Jan 2024 .. Sep 2025  (used for composite score & keep/revert)
+    #   holdout   = Oct 2025 .. Dec 2025  (NEVER touched here — see runner.holdout)
+    period_start: str = "2024-01-01"
+    period_end: str = "2025-10-01"
     tf: str = "1h"
     walk_windows: int = 0
     dd_penalty: float = 0.5

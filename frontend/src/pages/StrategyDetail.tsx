@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   api,
   type EquityCurve,
+  type HoldoutReport,
   type Job,
   type StrategyDetail as Detail,
 } from "../api";
@@ -18,12 +19,14 @@ type IterForm = {
 };
 
 const defaultForm: IterForm = {
-  start: "2025-01-01",
-  end: "2025-02-01",
+  start: "2024-01-01",
+  end: "2025-10-01",
   tf: "1h",
   walk: 0,
   note: "",
 };
+
+const HOLDOUT = { start: "2025-10-01", end: "2026-01-01", tf: "1h" };
 
 export function StrategyDetail() {
   const { name = "" } = useParams();
@@ -34,7 +37,10 @@ export function StrategyDetail() {
   const [curves, setCurves] = useState<{ iter: number; verdict: string; data: EquityCurve }[]>([]);
   const [form, setForm] = useState<IterForm>(defaultForm);
   const [job, setJob] = useState<Job | null>(null);
+  const [holdout, setHoldout] = useState<HoldoutReport>(null);
+  const [holdoutJob, setHoldoutJob] = useState<Job | null>(null);
   const pollTimer = useRef<number | null>(null);
+  const holdoutPollTimer = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -50,7 +56,8 @@ export function StrategyDetail() {
 
   useEffect(() => {
     load();
-  }, [load]);
+    api.holdoutReport(name).then(setHoldout).catch(() => setHoldout(null));
+  }, [load, name]);
 
   // Load equity curves whenever selection or overlay flag changes.
   useEffect(() => {
@@ -101,8 +108,42 @@ export function StrategyDetail() {
   useEffect(() => {
     return () => {
       if (pollTimer.current) window.clearTimeout(pollTimer.current);
+      if (holdoutPollTimer.current) window.clearTimeout(holdoutPollTimer.current);
     };
   }, []);
+
+  const pollHoldoutJob = useCallback(
+    async (id: string) => {
+      try {
+        const j = await api.job(id);
+        setHoldoutJob(j);
+        if (j.status === "done" || j.status === "failed") {
+          if (holdoutPollTimer.current) {
+            window.clearTimeout(holdoutPollTimer.current);
+            holdoutPollTimer.current = null;
+          }
+          const rep = await api.holdoutReport(name).catch(() => null);
+          setHoldout(rep);
+          return;
+        }
+        holdoutPollTimer.current = window.setTimeout(() => pollHoldoutJob(id), 1000);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [name]
+  );
+
+  const runHoldout = async () => {
+    setHoldoutJob(null);
+    try {
+      const j = await api.holdout(name, HOLDOUT);
+      setHoldoutJob(j);
+      pollHoldoutJob(j.id);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -150,6 +191,58 @@ export function StrategyDetail() {
               <KV k="note" v={best.note || "—"} />
             </tbody>
           </table>
+        )}
+      </Card>
+
+      <Card title="Holdout sanity check (2025-10 → 2025-12, never seen by iteration)">
+        <div className="flex items-start gap-6 flex-wrap">
+          <div className="flex-1 min-w-[260px]">
+            {!holdout?.report ? (
+              <em className="text-slate-500">no holdout report yet — run one to validate the current best</em>
+            ) : (
+              <table className="text-sm">
+                <tbody>
+                  <KV k="for iter" v={holdout.report.iter} />
+                  <KV k="period" v={holdout.report.period.join(" → ")} />
+                  <KV
+                    k="composite"
+                    v={
+                      <>
+                        <strong>{fmt(holdout.report.composite)}</strong>
+                        {holdout.report.best_composite_train_val !== null && (
+                          <span className="text-slate-500 ml-2">
+                            (train+val best: {fmt(holdout.report.best_composite_train_val)})
+                          </span>
+                        )}
+                      </>
+                    }
+                  />
+                  <KV k="sharpe" v={fmt(holdout.report.metrics?.sharpe)} />
+                  <KV k="sortino" v={fmt(holdout.report.metrics?.sortino)} />
+                  <KV k="max DD" v={fmtPct(holdout.report.metrics?.max_dd)} />
+                  <KV k="trades" v={holdout.report.metrics?.n_trades ?? "—"} />
+                  <KV k="ran at" v={new Date(holdout.report.ran_at).toLocaleString()} />
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            <button
+              onClick={runHoldout}
+              disabled={holdoutJob?.status === "running"}
+              className="bg-amber-600 hover:bg-amber-500 disabled:bg-slate-600 px-4 py-1.5 rounded font-semibold"
+            >
+              {holdoutJob?.status === "running" ? "running…" : "run holdout"}
+            </button>
+            <span className="text-xs text-slate-500 text-right max-w-[200px]">
+              uses current <code className="text-slate-400">strategy.py</code> on 2025-Q4. Does not change <code className="text-slate-400">best.json</code>.
+            </span>
+          </div>
+        </div>
+        {holdoutJob && (
+          <pre className="mt-3 bg-slate-950 text-slate-300 text-xs p-3 rounded max-h-60 overflow-auto whitespace-pre-wrap">
+            {`[${holdoutJob.status}${holdoutJob.exit_code !== null ? ` exit=${holdoutJob.exit_code}` : ""}]\n${holdoutJob.tail.join("\n")}`}
+          </pre>
         )}
       </Card>
 

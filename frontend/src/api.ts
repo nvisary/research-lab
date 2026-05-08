@@ -75,6 +75,21 @@ const j = async <T>(p: string, init?: RequestInit): Promise<T> => {
   return r.json();
 };
 
+export type HoldoutReport = {
+  report: {
+    iter: number;
+    ran_at: string;
+    period: [string, string];
+    tf: string;
+    symbols: string[];
+    params: Record<string, unknown>;
+    metrics: Metrics;
+    composite: number | null;
+    best_composite_train_val: number | null;
+  };
+  equity: { timestamp: string[]; equity: number[]; benchmark: number[] } | null;
+} | null;
+
 export const api = {
   strategies: () => j<StrategySummary[]>("/api/strategies"),
   strategy: (name: string) => j<StrategyDetail>(`/api/strategies/${name}`),
@@ -89,5 +104,13 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  holdout: (name: string, body: { start: string; end: string; tf: string }) =>
+    j<Job>(`/api/strategies/${name}/holdout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  holdoutReport: (name: string) =>
+    j<HoldoutReport>(`/api/strategies/${name}/holdout`),
   job: (id: string) => j<Job>(`/api/jobs/${id}`),
 };

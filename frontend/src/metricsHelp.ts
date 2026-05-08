@@ -38,6 +38,19 @@ export const HELP: Record<string, string> = {
     "Number of walk-forward train/OOS windows the iterate period was split into (default 4).",
   "per-window composite":
     "Per-window composite scores. Wide spread = unstable strategy, narrow + positive = robust.",
+  "WF CAGR":
+    "Compound Annual Growth Rate per WF window, then averaged across windows. " +
+    "Annualizes the OOS slice — answers 'if we ran this strategy with $10k for a year, what would it earn'. " +
+    "Mean and median are reported because a single short OOS slice can give a noisy CAGR.",
+  "WF return / window":
+    "Mean total return inside each window's OOS slice (not annualized). " +
+    "Each WF window is a self-contained backtest with its own $10k init, so this is the typical " +
+    "return per window; for an annualized headline use WF CAGR.",
+  "OOS CAGR":
+    "Compound Annual Growth Rate on the OOS slice, annualized. Easier to read than Sharpe for " +
+    "the layman: 'this strategy makes ~X% per year on average'.",
+  "OOS total return":
+    "Cumulative return over the OOS slice (not annualized).",
 
   // ── Single-split (no WF) view ──────────────────────────────────────────
   "train sharpe":

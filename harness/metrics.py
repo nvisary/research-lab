@@ -207,6 +207,8 @@ def aggregate_wf_composite(window_metrics: list[dict],
     sharpes = [m.get("sharpe", 0.0) for m in window_metrics]
     dds = [m.get("max_dd", 0.0) for m in window_metrics]
     trades = [m.get("n_trades", 0) for m in window_metrics]
+    cagrs = [m.get("cagr", 0.0) for m in window_metrics]
+    total_returns = [m.get("total_return", 0.0) for m in window_metrics]
     return score, {
         "mean_sharpe": float(np.mean(sharpes)),
         "std_sharpe": float(np.std(sharpes, ddof=0)),
@@ -214,6 +216,9 @@ def aggregate_wf_composite(window_metrics: list[dict],
         "mean_max_dd": float(np.mean(dds)),
         "worst_max_dd": float(np.max(dds)),
         "mean_n_trades": float(np.mean(trades)),
+        "mean_cagr": float(np.mean(cagrs)),
+        "median_cagr": float(np.median(cagrs)),
+        "mean_total_return": float(np.mean(total_returns)),
         "n_windows": len(window_metrics),
         "window_composites": composites,
     }

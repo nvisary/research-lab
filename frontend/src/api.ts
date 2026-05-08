@@ -90,6 +90,9 @@ export type WfAggregate = {
   mean_max_dd: number;
   worst_max_dd: number;
   mean_n_trades: number;
+  mean_cagr?: number;
+  median_cagr?: number;
+  mean_total_return?: number;
   n_windows: number;
   window_composites?: number[];
 } | null;

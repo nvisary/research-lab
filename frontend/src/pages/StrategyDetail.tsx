@@ -43,6 +43,9 @@ export function StrategyDetail() {
   const [job, setJob] = useState<Job | null>(null);
   const [holdout, setHoldout] = useState<HoldoutReport>(null);
   const [holdoutJob, setHoldoutJob] = useState<Job | null>(null);
+  const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" }>({
+    key: "iter", dir: "desc",
+  });
   const pollTimer = useRef<number | null>(null);
   const holdoutPollTimer = useRef<number | null>(null);
 
@@ -162,7 +165,35 @@ export function StrategyDetail() {
     }
   };
 
-  const reversedHistory = useMemo(() => detail?.history.slice().reverse() ?? [], [detail]);
+  const sortedHistory = useMemo(() => {
+    const rows = detail?.history.slice() ?? [];
+    const valueOf = (h: typeof rows[number], key: string): number | string | null => {
+      switch (key) {
+        case "iter": return h.iter;
+        case "verdict": return h.verdict;
+        case "composite": return h.composite ?? -Infinity;
+        case "OOS sharpe": return h.metrics_oos?.sharpe ?? -Infinity;
+        case "OOS max DD": return h.metrics_oos?.max_dd ?? Infinity;
+        case "OOS trades": return h.metrics_oos?.n_trades ?? -Infinity;
+        case "DSR": return h.dsr ?? -Infinity;
+        case "note": return h.note ?? "";
+        case "finished": return h.finished ? new Date(h.finished).getTime() : 0;
+        default: return 0;
+      }
+    };
+    const sign = sort.dir === "asc" ? 1 : -1;
+    return rows.sort((a, b) => {
+      const va = valueOf(a, sort.key);
+      const vb = valueOf(b, sort.key);
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * sign;
+      return String(va).localeCompare(String(vb)) * sign;
+    });
+  }, [detail, sort]);
+
+  const onSort = (key: string) =>
+    setSort((s) => (s.key === key
+      ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+      : { key, dir: "desc" }));
 
   if (error) return <div className="text-rose-400">{error}</div>;
   if (!detail) return <div className="text-slate-500">loading…</div>;
@@ -221,6 +252,20 @@ export function StrategyDetail() {
                       </>
                     }
                   />
+                  <KV
+                    k="WF CAGR"
+                    v={
+                      <>
+                        mean <strong>{fmtPct(best.wf_aggregate.mean_cagr)}</strong> ·{" "}
+                        median {fmtPct(best.wf_aggregate.median_cagr)}{" "}
+                        <span className="text-slate-500">(annualized per window)</span>
+                      </>
+                    }
+                  />
+                  <KV
+                    k="WF return / window"
+                    v={<>mean {fmtPct(best.wf_aggregate.mean_total_return)} <span className="text-slate-500">over the OOS slice (~{(21 / (best.wf_aggregate.n_windows || 4) * 0.25).toFixed(1)}mo)</span></>}
+                  />
                   <KV k="WF max DD" v={<>worst {fmtPct(best.wf_aggregate.worst_max_dd)} • mean {fmtPct(best.wf_aggregate.mean_max_dd)}</>} />
                   <KV k="WF windows" v={best.wf_aggregate.n_windows} />
                   {best.wf_aggregate.window_composites && (
@@ -238,6 +283,8 @@ export function StrategyDetail() {
                 <>
                   <KV k="train sharpe" v={fmt(best.metrics?.train?.sharpe)} />
                   <KV k="OOS sharpe" v={fmt(best.metrics?.oos?.sharpe)} />
+                  <KV k="OOS CAGR" v={fmtPct(best.metrics?.oos?.cagr)} />
+                  <KV k="OOS total return" v={fmtPct(best.metrics?.oos?.total_return)} />
                   <KV k="OOS max DD" v={fmtPct(best.metrics?.oos?.max_dd)} />
                   <KV k="OOS trades" v={best.metrics?.oos?.n_trades ?? "—"} />
                 </>
@@ -396,28 +443,22 @@ export function StrategyDetail() {
       </Card>
 
       <Card title="History">
-        {reversedHistory.length === 0 ? (
+        {sortedHistory.length === 0 ? (
           <em className="text-slate-500">no iterations yet</em>
         ) : null}
-        {reversedHistory.length > 0 && (
+        {sortedHistory.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-slate-400 text-xs uppercase tracking-wider">
                 <tr>
-                  <Th>iter</Th>
-                  <Th>verdict</Th>
-                  <Th>composite</Th>
-                  <Th>OOS sharpe</Th>
-                  <Th>OOS max DD</Th>
-                  <Th>OOS trades</Th>
-                  <Th>DSR</Th>
-                  <Th>note</Th>
-                  <Th>finished</Th>
+                  {(["iter","verdict","composite","OOS sharpe","OOS max DD","OOS trades","DSR","note","finished"] as const).map((k) => (
+                    <SortableTh key={k} label={k} sort={sort} onSort={onSort} />
+                  ))}
                   <Th help="Open the standalone HTML tear sheet for this iteration in a new tab.">📊</Th>
                 </tr>
               </thead>
               <tbody>
-                {reversedHistory.map((h) => (
+                {sortedHistory.map((h) => (
                   <tr key={h.iter} className="border-t border-edge">
                     <td className="px-3 py-1.5">{h.iter}</td>
                     <td className="px-3 py-1.5">
@@ -490,6 +531,31 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
     </tr>
   );
 }
+
+function SortableTh({ label, sort, onSort }:
+  { label: string; sort: { key: string; dir: "asc" | "desc" }; onSort: (k: string) => void }
+) {
+  const active = sort.key === label;
+  const arrow = active ? (sort.dir === "asc" ? "↑" : "↓") : "";
+  const help = helpFor(label);
+  const inner = (
+    <button
+      type="button"
+      onClick={() => onSort(label)}
+      className={`inline-flex items-center gap-1 cursor-pointer hover:text-slate-100
+                  ${active ? "text-blue-400" : ""}`}
+    >
+      {label}
+      <span className="text-[10px] w-3">{arrow}</span>
+    </button>
+  );
+  return (
+    <th className="text-left px-3 py-2 font-medium select-none">
+      {help ? <Tooltip text={help}>{inner}</Tooltip> : inner}
+    </th>
+  );
+}
+
 
 function Th({ children, help }: { children: React.ReactNode; help?: string }) {
   const text = help ?? (typeof children === "string" ? helpFor(children) : undefined);

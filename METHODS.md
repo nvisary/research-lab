@@ -22,16 +22,31 @@ The cheapest experiment: replace one indicator with a sibling.
 | Donchian breakout | Volatility-adjusted breakout (`high - close > k·atr`) | filters fake breakouts |
 
 ### 1.2 Multi-timeframe confirmation
-Cheapest robustness win after indicator swaps. Trigger on a fast TF, gate by a slow TF.
+Cheapest robustness win after indicator swaps. Trigger on a fast TF, gate by
+one or more slower TFs. Set `DEFAULT_TF` to the FAST one (the decision
+frequency); derive slower ones inside `generate_signals` via the helper:
 
 ```python
-# inside generate_signals
-df_4h = df.resample("4h").agg({"close": "last"}).ffill().reindex(df.index, method="ffill")
-trend_up = df_4h["close"] > df_4h["close"].ewm(span=200).mean()
-pos = pos.where(trend_up.shift(1), 0.0)   # only longs when 4h trend is up
+from harness.utils import resample_higher
+
+DEFAULT_TF = "5min"
+
+def generate_signals(data, params):
+    df = data["BTCUSDT"]
+    df_4h = resample_higher(df, "4h", {"close": "last"}, target_index=df.index)
+    trend_up = df_4h["close"] > df_4h["close"].ewm(span=200).mean()
+    pos = pos.where(trend_up, 0.0)   # only longs when 4h trend is up
 ```
 
-Hypothesis: most chop-period whipsaws happen against the higher-TF trend. Gating cuts them at low cost.
+The helper applies `.shift(1)` on the resampled series so the value you read at
+decision time `t` comes from the previous COMPLETED higher-TF bar — no
+lookahead. Plain `df.resample("4h").agg({"close": "last"})` is a **forward-look
+bug** (the 08:00 bar's `close` equals `df.close[11:00]`); the audit will catch
+it but you save iterations by using the helper from the start.
+
+Hypothesis: most chop-period whipsaws happen against the higher-TF trend.
+Gating cuts them at low cost. Triple confirmation (5m × 30m × 4h) trades less
+but with much higher selectivity.
 
 ### 1.3 Momentum families
 - **Time-series momentum**: `sign(return_n)` over a lookback. Carries trend exposure.

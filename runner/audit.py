@@ -28,7 +28,8 @@ def main() -> None:
                     help="Start of the audit window (default: train start).")
     ap.add_argument("--days", type=int, default=120,
                     help="Length of the audit window in days.")
-    ap.add_argument("--tf", default="1h")
+    ap.add_argument("--tf", default=None,
+                    help="If omitted, read strategy.py:DEFAULT_TF, fall back to '1h'.")
     ap.add_argument("--k", type=int, default=12,
                     help="Number of per-bar perturbations.")
     ap.add_argument("--bars", type=int, default=1500,
@@ -38,10 +39,11 @@ def main() -> None:
     strategy_dir = Path(args.strategy_dir).resolve()
     mod = bt.load_strategy(strategy_dir)
     symbols = (getattr(mod, "DEFAULT_SYMBOLS", None) or ["BTCUSDT"])[:2]
+    tf = args.tf if args.tf is not None else getattr(mod, "DEFAULT_TF", "1h")
 
     start = pd.Timestamp(args.start, tz="UTC")
     end = start + pd.Timedelta(days=args.days)
-    data = load_many(symbols, start, end, tf=args.tf)
+    data = load_many(symbols, start, end, tf=tf)
     data = {s: df for s, df in data.items() if not df.empty}
     if not data:
         print(json.dumps({"error": "no data in audit window"}, indent=2))

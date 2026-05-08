@@ -19,6 +19,7 @@ Stateless across calls. All state lives in strategies/<name>/runs/.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import shutil
 import sys
@@ -45,7 +46,9 @@ class IterationConfig:
     #   holdout   = Oct 2025 .. Dec 2025  (NEVER touched here — see runner.holdout)
     period_start: str = "2024-01-01"
     period_end: str = "2025-10-01"
-    tf: str = "1h"
+    # tf=None means "read from strategy.py:DEFAULT_TF, fall back to 1h".
+    # CLI --tf or programmatic override forces a specific value regardless.
+    tf: str | None = None
     walk_windows: int = 4   # 4 walk-forward windows ~5mo each on the default period
     stability_penalty: float = 0.5
     dd_penalty: float = 0.5
@@ -186,6 +189,15 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
     iter_id = _next_iter_id(runs)
     snapshot = runs / "last_attempt.py"
     shutil.copy2(strategy_file, snapshot)
+
+    # Resolve TF: explicit cfg.tf wins; otherwise read DEFAULT_TF from the
+    # strategy module; otherwise fall back to "1h".
+    if cfg.tf is None:
+        try:
+            mod_for_tf = bt.load_strategy(strategy_dir)
+            cfg = dataclasses.replace(cfg, tf=getattr(mod_for_tf, "DEFAULT_TF", "1h"))
+        except Exception:
+            cfg = dataclasses.replace(cfg, tf="1h")
 
     started = datetime.now(timezone.utc).isoformat()
 
@@ -501,7 +513,9 @@ def main() -> None:
     ap.add_argument("strategy_dir")
     ap.add_argument("--start", default="2024-01-01")
     ap.add_argument("--end", default="2025-10-01")
-    ap.add_argument("--tf", default="1h")
+    ap.add_argument("--tf", default=None,
+                    help="Decision timeframe. If omitted, read strategy.py:DEFAULT_TF, "
+                         "fall back to '1h'.")
     ap.add_argument("--walk", type=int, default=4,
                     help="Number of walk-forward windows (1 == single train/OOS split).")
     ap.add_argument("--audit", choices=["once", "always", "never"], default="once",

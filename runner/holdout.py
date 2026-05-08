@@ -34,7 +34,7 @@ DEFAULT_HOLDOUT_START = "2025-10-01"
 DEFAULT_HOLDOUT_END = "2026-05-01"   # 7-month holdout: 2025-Q4 + 2026-Q1+Apr
 
 
-def run_holdout(strategy_dir: Path, start: str, end: str, tf: str = "1h",
+def run_holdout(strategy_dir: Path, start: str, end: str, tf: str | None = None,
                 audit: bool = True) -> dict:
     strategy_dir = Path(strategy_dir).resolve()
     runs = strategy_dir / "runs"
@@ -49,6 +49,8 @@ def run_holdout(strategy_dir: Path, start: str, end: str, tf: str = "1h",
     mod = bt.load_strategy(strategy_dir)
     params = dict(getattr(mod, "DEFAULT_PARAMS", {}))
     symbols = getattr(mod, "DEFAULT_SYMBOLS", ["BTCUSDT"])
+    if tf is None:
+        tf = getattr(mod, "DEFAULT_TF", "1h")
 
     # Lookahead audit pre-flight (cheap on its own; runs even when iterate
     # already audited because the human may have edited strategy.py since).
@@ -130,7 +132,8 @@ def main() -> None:
     ap.add_argument("strategy_dir")
     ap.add_argument("--start", default=DEFAULT_HOLDOUT_START)
     ap.add_argument("--end", default=DEFAULT_HOLDOUT_END)
-    ap.add_argument("--tf", default="1h")
+    ap.add_argument("--tf", default=None,
+                    help="If omitted, read strategy.py:DEFAULT_TF, fall back to '1h'.")
     ap.add_argument("--no-audit", action="store_true",
                     help="Skip lookahead audit (only for trusted strategies).")
     args = ap.parse_args()

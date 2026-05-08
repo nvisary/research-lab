@@ -99,16 +99,47 @@ For each cycle:
 
 ```python
 DEFAULT_SYMBOLS: list[str]
+DEFAULT_TF: str               # decision frequency: "1m", "5m", "15m", "1h", "4h", ...
 DEFAULT_PARAMS: dict
-PARAM_SPACE: dict   # hint ranges, e.g. {"fast": (4, 200)}
+PARAM_SPACE: dict             # hint ranges, e.g. {"fast": (4, 200)}
 
 def generate_signals(data: dict[str, pd.DataFrame], params: dict) -> pd.DataFrame:
     """
-    data:    {symbol: ohlcv_df},  index = tz-aware UTC DatetimeIndex on requested tf,
+    data:    {symbol: ohlcv_df},  index = tz-aware UTC DatetimeIndex at DEFAULT_TF,
                                   columns = open, high, low, close, volume
     returns: long-format DataFrame [timestamp, symbol, position],  position ∈ [-1, 1]
     """
 ```
+
+**`DEFAULT_TF` is part of your hypothesis** — set it to the FINEST timeframe
+your strategy needs. The harness loads, audits, and backtests at this TF.
+For multi-TF logic (e.g. 5m decisions confirmed by 30m and 4h trend), set
+`DEFAULT_TF = "5min"` and use `harness.utils.resample_higher` inside
+`generate_signals` to derive higher-TF signals **safely**:
+
+```python
+from harness.utils import resample_higher
+
+DEFAULT_TF = "5min"
+
+def generate_signals(data, params):
+    df = data["BTCUSDT"]                           # 5m bars
+    bb_mid = df["close"].rolling(20).mean()
+    long_5m = df["close"] < (bb_mid - 2 * df["close"].rolling(20).std())
+    # 30m and 4h confirmation — auto-shifted, lookahead-safe:
+    df30 = resample_higher(df, "30min", {"close": "last"}, target_index=df.index)
+    df4h = resample_higher(df, "4h",    {"close": "last"}, target_index=df.index)
+    trend_30m = df30["close"] > df30["close"].rolling(20).mean()
+    bull_4h   = df4h["close"] > df4h["close"].ewm(span=50).mean()
+    pos = (long_5m & trend_30m & bull_4h).astype(float)
+    pos = pos.shift(1).fillna(0.0)                  # final shift on decision TF
+    return pd.DataFrame({"timestamp": df.index, "symbol": "BTCUSDT",
+                          "position": pos.values})
+```
+
+Naive `df.resample("4h")` without shifting is a **forward-look bug** (the bar
+labeled "08:00" contains data through 11:59) and the audit will reject it.
+`resample_higher` does the shift for you so you can't forget.
 
 The harness handles fees, slippage, sizing, splits, metrics. You decide *what* to hold and *when*.
 

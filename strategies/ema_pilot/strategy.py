@@ -13,6 +13,12 @@ import pandas as pd
 
 DEFAULT_SYMBOLS = ["BTCUSDT"]
 
+# Decision frequency. Harness loads OHLCV at this TF and runs the backtest on
+# it. For multi-TF strategies (e.g. 5m decisions confirmed by 30m and 4h
+# trend), set DEFAULT_TF to the FINEST TF and use harness.utils.resample_higher
+# to derive the higher-TF signals safely from `data` inside generate_signals.
+DEFAULT_TF = "1h"
+
 DEFAULT_PARAMS = {
     "fast": 12,
     "slow": 48,

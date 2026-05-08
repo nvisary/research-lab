@@ -1,13 +1,27 @@
 """Load OHLCV from parquet partitions into pandas DataFrames."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
-DATA_ROOT = Path(__file__).resolve().parents[1] / "data" / "bybit" / "perp" / "1m"
-FUNDING_ROOT = Path(__file__).resolve().parents[1] / "data" / "bybit" / "perp" / "funding"
+
+def data_root() -> Path:
+    """Project data directory.
+
+    Override location with the ``RESEARCHLAB_DATA_ROOT`` environment variable
+    (e.g. mount on a separate fast disk). Defaults to ``<repo>/data``.
+    """
+    env_root = os.environ.get("RESEARCHLAB_DATA_ROOT")
+    if env_root:
+        return Path(env_root)
+    return Path(__file__).resolve().parents[1] / "data"
+
+
+DATA_ROOT = data_root() / "bybit" / "perp" / "1m"
+FUNDING_ROOT = data_root() / "bybit" / "perp" / "funding"
 
 
 def _months_between(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[int, int]]:

@@ -20,8 +20,10 @@ import ccxt
 import pandas as pd
 from tqdm import tqdm
 
-DATA_ROOT = Path(__file__).resolve().parents[1] / "data" / "bybit" / "perp" / "1m"
-META_ROOT = Path(__file__).resolve().parents[1] / "data" / "meta"
+from datafeed.loader import data_root  # canonical resolver, honors $RESEARCHLAB_DATA_ROOT
+
+DATA_ROOT = data_root() / "bybit" / "perp" / "1m"
+META_ROOT = data_root() / "meta"
 
 MAX_LIMIT = 1000  # bybit cap per fetch_ohlcv
 TIMEFRAME = "1m"

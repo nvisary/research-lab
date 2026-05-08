@@ -28,7 +28,9 @@ from datafeed.download_bybit import (
     parse_ym,
 )
 
-DATA_ROOT = Path(__file__).resolve().parents[1] / "data" / "bybit" / "perp" / "funding"
+from datafeed.loader import data_root  # honors $RESEARCHLAB_DATA_ROOT
+
+DATA_ROOT = data_root() / "bybit" / "perp" / "funding"
 MAX_LIMIT = 200  # bybit cap for fetch_funding_rate_history
 
 # Expected funding payments per month: ~ 3/day × days_in_month. Bybit can shift

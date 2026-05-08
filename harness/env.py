@@ -46,6 +46,11 @@ def _git(cmd: list[str], cwd: Path) -> str | None:
         return None
 
 
+def _kline_root() -> Path:
+    from datafeed.loader import DATA_ROOT
+    return DATA_ROOT
+
+
 def _dataset_snapshot(root: Path) -> str | None:
     """Latest mtime across the kline parquet tree, ISO-formatted UTC."""
     if not root.exists():
@@ -90,9 +95,7 @@ def capture(refresh: bool = False) -> dict:
             "branch": branch,
             "dirty": bool(dirty.strip()) if dirty is not None else None,
         },
-        "dataset_snapshot": _dataset_snapshot(
-            root / "data" / "bybit" / "perp" / "1m"
-        ),
+        "dataset_snapshot": _dataset_snapshot(_kline_root()),
     }
     _CACHE = out
     _CACHE_BUILT_AT = now

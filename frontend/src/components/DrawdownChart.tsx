@@ -1,7 +1,7 @@
 import factoryImport from "react-plotly.js/factory";
 // @ts-expect-error — no types for the dist-min bundle
 import Plotly from "plotly.js-basic-dist-min";
-import type { EquityCurve } from "../api";
+import type { EquityCurve, EquityWindow } from "../api";
 
 const createPlotlyComponent =
   (factoryImport as any).default ?? (factoryImport as any);
@@ -33,6 +33,10 @@ export function DrawdownChart({ curves, highlightIter }: Props) {
   const single = curves.length === 1;
   const traces: any[] = [];
   const cutoffs: string[] = [];
+  const firstWindows: EquityWindow[] | null =
+    curves[0]?.data.windows && curves[0].data.windows.length > 0
+      ? curves[0].data.windows
+      : null;
 
   for (const c of curves) {
     const windows = c.data.windows && c.data.windows.length > 0
@@ -85,6 +89,36 @@ export function DrawdownChart({ curves, highlightIter }: Props) {
     }
   }
 
+  // Window-boundary lines + faint train-shading, same convention as EquityChart.
+  const shapes: any[] = [];
+  const annotations: any[] = [];
+  if (firstWindows && firstWindows.length > 1) {
+    firstWindows.forEach((w, i) => {
+      if (w.split_cutoff) {
+        shapes.push({
+          type: "rect" as const, xref: "x" as const, yref: "paper" as const,
+          x0: w.timestamp[0], x1: w.split_cutoff,
+          y0: 0, y1: 1,
+          fillcolor: "rgba(148, 163, 184, 0.04)",
+          line: { width: 0 },
+          layer: "below" as const,
+        });
+      }
+      if (i > 0) {
+        shapes.push({
+          type: "line" as const, xref: "x" as const, yref: "paper" as const,
+          x0: w.timestamp[0], x1: w.timestamp[0], y0: 0, y1: 1,
+          line: { color: "#475569", width: 1 },
+        });
+      }
+    });
+  }
+  cutoffs.forEach((c) => shapes.push({
+    type: "line" as const, xref: "x" as const, yref: "paper" as const,
+    x0: c, x1: c, y0: 0, y1: 1,
+    line: { color: "#ef4444", dash: "dash" as const, width: 1 },
+  }));
+
   return (
     <Plot
       data={traces}
@@ -104,15 +138,8 @@ export function DrawdownChart({ curves, highlightIter }: Props) {
           rangemode: "nonpositive",
         },
         legend: { orientation: "h", y: -0.22 },
-        shapes: cutoffs.map((c) => ({
-          type: "line" as const,
-          x0: c,
-          x1: c,
-          yref: "paper" as const,
-          y0: 0,
-          y1: 1,
-          line: { color: "#ef4444", dash: "dash" as const, width: 1 },
-        })),
+        shapes,
+        annotations,
       }}
     />
   );

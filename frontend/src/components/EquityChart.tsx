@@ -1,7 +1,7 @@
 import factoryImport from "react-plotly.js/factory";
 // @ts-expect-error — no types for the dist-min bundle
 import Plotly from "plotly.js-basic-dist-min";
-import type { EquityCurve } from "../api";
+import type { EquityCurve, EquityWindow } from "../api";
 
 const createPlotlyComponent =
   (factoryImport as any).default ?? (factoryImport as any);
@@ -21,6 +21,13 @@ export function EquityChart({ curves, highlightIter }: Props) {
   const single = curves.length === 1;
   const traces: any[] = [];
   const cutoffs: string[] = [];
+  // Window boundaries are derived from the FIRST curve's window timestamps.
+  // In overlay mode all curves share the same WF schedule, so the first one
+  // is representative.
+  const firstWindows: EquityWindow[] | null =
+    curves[0]?.data.windows && curves[0].data.windows.length > 0
+      ? curves[0].data.windows
+      : null;
 
   for (const c of curves) {
     const windows = c.data.windows && c.data.windows.length > 0
@@ -65,15 +72,71 @@ export function EquityChart({ curves, highlightIter }: Props) {
     }
   }
 
-  const shapes = cutoffs.map((c) => ({
+  // Window boundaries (solid faint lines) so the user can see exactly where
+  // each WF window starts/ends. Internal cutoffs (red dashed) are train→OOS
+  // splits inside each window — different concept.
+  const shapes: any[] = [];
+  const annotations: any[] = [];
+  if (firstWindows && firstWindows.length > 1) {
+    firstWindows.forEach((w, i) => {
+      const start = w.timestamp[0];
+      // Faint background shade for the train slice of each window so users
+      // see "this slab is train, after the red line is OOS, the next slab
+      // is the next window".
+      if (w.split_cutoff) {
+        shapes.push({
+          type: "rect" as const,
+          xref: "x" as const,
+          yref: "paper" as const,
+          x0: start,
+          x1: w.split_cutoff,
+          y0: 0,
+          y1: 1,
+          fillcolor: "rgba(148, 163, 184, 0.04)",  // slate-400 @ 4%
+          line: { width: 0 },
+          layer: "below" as const,
+        });
+      }
+      // Solid window-boundary line at the START of each window (skip i=0 since
+      // it's the chart left edge already).
+      if (i > 0) {
+        shapes.push({
+          type: "line" as const,
+          xref: "x" as const,
+          yref: "paper" as const,
+          x0: start, x1: start, y0: 0, y1: 1,
+          line: { color: "#475569", width: 1 },  // slate-600
+        });
+      }
+      // Window label centered horizontally on the window
+      const mid = w.timestamp[Math.floor(w.timestamp.length / 2)];
+      annotations.push({
+        x: mid, xref: "x" as const,
+        y: 1.04, yref: "paper" as const,
+        text: `w${w.window}`,
+        showarrow: false,
+        font: { color: WINDOW_COLORS[w.window % WINDOW_COLORS.length], size: 11 },
+      });
+    });
+  }
+
+  // Train→OOS cutoff lines (red, dashed). These are INSIDE each window.
+  cutoffs.forEach((c) => shapes.push({
     type: "line" as const,
-    x0: c,
-    x1: c,
-    yref: "paper" as const,
-    y0: 0,
-    y1: 1,
+    xref: "x" as const,
+    x0: c, x1: c,
+    yref: "paper" as const, y0: 0, y1: 1,
     line: { color: "#ef4444", dash: "dash" as const, width: 1 },
   }));
+  if (cutoffs.length === 1) {
+    annotations.push({
+      x: cutoffs[0], xref: "x" as const,
+      y: 1.04, yref: "paper" as const,
+      text: "train | OOS",
+      showarrow: false,
+      font: { color: "#ef4444", size: 10 },
+    });
+  }
 
   return (
     <Plot
@@ -85,15 +148,12 @@ export function EquityChart({ curves, highlightIter }: Props) {
         paper_bgcolor: "rgba(0,0,0,0)",
         plot_bgcolor: "rgba(0,0,0,0)",
         font: { color: "#cbd5e1", size: 11 },
-        margin: { t: 10, b: 40, l: 60, r: 10 },
+        margin: { t: 24, b: 40, l: 60, r: 10 },
         xaxis: { gridcolor: "#334155" },
         yaxis: { title: { text: "equity" }, gridcolor: "#334155" },
         legend: { orientation: "h", y: -0.18 },
         shapes,
-        annotations: cutoffs.length === 1
-          ? [{ x: cutoffs[0], yref: "paper", y: 1.04, text: "OOS →", showarrow: false,
-               font: { color: "#ef4444", size: 10 } }]
-          : [],
+        annotations,
       }}
     />
   );

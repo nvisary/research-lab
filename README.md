@@ -38,7 +38,7 @@ cd frontend && npm run build                        # outputs frontend/dist/
 uv run uvicorn web.app:app --port 8000              # http://localhost:8000/
 ```
 
-LLM agents: read [`AGENTS.md`](AGENTS.md) before touching anything.
+LLM agents: read [`AGENTS.md`](AGENTS.md) before touching anything. For a catalog of concrete strategy-improvement techniques, see [`METHODS.md`](METHODS.md).
 
 ## Strategy contract
 

@@ -152,6 +152,14 @@ When you have access to it, also think about:
 
 ---
 
+## 7a. Vocabulary of techniques
+
+For a catalog of concrete improvement methods — indicator swaps, multi-TF gating,
+volatility targeting, stop-loss families, cross-sectional ranking, PSR / DSR /
+bootstrap, cost-aware decisions, decision-tree heuristics for common symptoms —
+see [`METHODS.md`](METHODS.md). It's a vocabulary, not a recipe. Pick **one**
+technique per iteration and articulate the hypothesis it embodies in `--note`.
+
 ## 8. Patterns that are usually fruitful
 
 - **Regime conditioning**: only trade when realized vol is in some band, or when a long-MA slope is positive. Markets have personality changes; a strategy can profit in one regime and bleed in another.

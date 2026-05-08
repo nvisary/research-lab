@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from harness import backtest as bt
+from harness import tearsheet as tearsheet_mod
 from harness.metrics import aggregate_wf_composite, composite_score
 from harness.stats import deflated_sharpe
 
@@ -284,6 +285,44 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
                 }
                 _save_best(runs, new_best, strategy_file)
                 verdict = "BASELINE"
+
+    # Tear sheet: only when we accepted the iter (so we don't accumulate noise
+    # for reverted attempts). Reverted strategy files are already restored;
+    # there's no useful HTML to make for them.
+    if verdict in ("KEEP", "BASELINE") and equity_path is not None:
+        try:
+            import pandas as _pd
+            ts_dir = runs / "tearsheets"
+            ts_dir.mkdir(exist_ok=True)
+            eq_df = _pd.read_parquet(equity_path)
+            trades_pq = runs / "trades" / f"iter_{iter_id:04d}.parquet"
+            tr_df = _pd.read_parquet(trades_pq) if trades_pq.exists() else None
+            history_so_far = []
+            if (runs / "history.jsonl").exists():
+                with (runs / "history.jsonl").open("r", encoding="utf-8") as fh:
+                    for ln in fh:
+                        try:
+                            history_so_far.append(json.loads(ln))
+                        except Exception:
+                            pass
+            iter_data_for_ts = {
+                "iter": iter_id,
+                "verdict": verdict,
+                "composite": composite,
+                "dsr": dsr_value,
+                "params": result.get("params"),
+                "symbols": result.get("symbols"),
+                "period": result.get("period"),
+                "tf": result.get("tf"),
+                "metrics": result.get("main"),
+                "wf_aggregate": wf_agg,
+            }
+            tearsheet_mod.render_to_file(
+                iter_data_for_ts, eq_df, tr_df, history_so_far,
+                ts_dir / f"iter_{iter_id:04d}.html",
+            )
+        except Exception as e:
+            traceback.print_exception(type(e), e, e.__traceback__)
 
     row = {
         "iter": iter_id,

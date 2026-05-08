@@ -222,6 +222,19 @@ uv run python -m runner.holdout strategies/<name>
 
 ---
 
+## 10a. Trade ledger and tear sheets
+
+Every accepted (KEEP / BASELINE) iteration writes:
+- `runs/trades/iter_NNNN.parquet` — full per-trade ledger with entry/exit
+  times, side, pnl, return, duration, slice (train/oos), window.
+- `runs/tearsheets/iter_NNNN.html` — standalone HTML report with summary
+  stats, equity curves per window, drawdown, monthly returns heatmap,
+  rolling 30d Sharpe, trade distribution, worst-N drawdowns.
+
+Open the tear sheet from the dashboard's Best card or History row.
+For programmatic access: `runs/trades/iter_NNNN.parquet` is plain
+parquet, load it with pandas / polars / DuckDB.
+
 ## 11. Where the data is
 
 - `data/bybit/perp/1m/<SYMBOL>/<YYYY-MM>.parquet` — OHLCV partitioned by month. Already de-duplicated, sorted, UTC-aligned.

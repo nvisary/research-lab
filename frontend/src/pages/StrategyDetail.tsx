@@ -181,7 +181,22 @@ export function StrategyDetail() {
         ) : (
           <table className="text-sm">
             <tbody>
-              <KV k="iter" v={best.iter} />
+              <KV
+                k="iter"
+                v={
+                  <>
+                    {best.iter}
+                    <a
+                      href={`/api/strategies/${name}/tearsheet/${best.iter}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-3 text-xs text-blue-400 hover:text-blue-300"
+                    >
+                      tear sheet ↗
+                    </a>
+                  </>
+                }
+              />
               <KV k="composite" v={<strong>{fmt(best.composite)}</strong>} />
               <KV
                 k="DSR"
@@ -396,6 +411,7 @@ export function StrategyDetail() {
                   <Th>DSR</Th>
                   <Th>note</Th>
                   <Th>finished</Th>
+                  <Th>📊</Th>
                 </tr>
               </thead>
               <tbody>
@@ -415,6 +431,20 @@ export function StrategyDetail() {
                     <td className="px-3 py-1.5 text-slate-300">{h.note || ""}</td>
                     <td className="px-3 py-1.5 text-slate-500 text-xs">
                       {h.finished ? new Date(h.finished).toLocaleString() : ""}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      {(h.verdict === "KEEP" || h.verdict === "BASELINE") ? (
+                        <a
+                          href={`/api/strategies/${name}/tearsheet/${h.iter}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-blue-400 hover:text-blue-300 underline"
+                        >
+                          open
+                        </a>
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

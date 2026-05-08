@@ -265,6 +265,15 @@ def api_iterate(name: str, body: IterateRequest):
     return job.to_json()
 
 
+@app.get("/api/strategies/{name}/tearsheet/{iter_id}")
+def api_tearsheet(name: str, iter_id: int):
+    d = _strategy_dir(name)
+    p = d / "runs" / "tearsheets" / f"iter_{iter_id:04d}.html"
+    if not p.exists():
+        raise HTTPException(404, f"no tearsheet for iter {iter_id}")
+    return FileResponse(p, media_type="text/html")
+
+
 @app.get("/api/strategies/{name}/trades/{iter_id}")
 def api_trades(name: str, iter_id: int):
     """Return trade ledger for an iteration plus quick summary stats.

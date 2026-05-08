@@ -194,14 +194,22 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
     if curves is not None:
         result["curves"] = curves
     if walk_windows > 1:
-        wf = []
+        windows = []
+        wf_curves: list[dict] = []
         for sp in walk_forward(period_start, period_end, n_windows=walk_windows):
-            wf.append(run_split(mod, p, symbols, sp, tf=tf))
-        oos_sharpes = [w["oos"].get("sharpe", 0.0) for w in wf]
-        result["walk_forward"] = {
-            "windows": wf,
-            "median_oos_sharpe": float(np.median(oos_sharpes)) if oos_sharpes else 0.0,
-        }
+            w = run_split(mod, p, symbols, sp, tf=tf, return_curves=return_curves)
+            if return_curves and "equity" in w:
+                wf_curves.append({
+                    "equity": w.pop("equity"),
+                    "benchmark": w.pop("benchmark"),
+                    "split_cutoff": w.pop("split_cutoff"),
+                    "raw_equity": w.pop("raw_equity", None),
+                    "funding_cashflow": w.pop("funding_cashflow", None),
+                })
+            windows.append(w)
+        result["walk_forward"] = {"windows": windows}
+        if return_curves and wf_curves:
+            result["walk_forward"]["curves"] = wf_curves
     return result
 
 

@@ -26,6 +26,7 @@ export type HistoryRow = {
   params: Record<string, unknown> | null;
   metrics_oos: Metrics;
   metrics_train: Metrics;
+  wf_aggregate: WfAggregate;
   note: string;
   finished: string;
   error: string | null;
@@ -39,6 +40,7 @@ export type Best = {
   tf: string;
   period: [string, string];
   metrics: { train: Metrics; oos: Metrics };
+  wf_aggregate: WfAggregate;
   note: string;
   saved_at: string;
 } | null;
@@ -51,13 +53,35 @@ export type StrategyDetail = {
   strategy_py: string;
 };
 
-export type EquityCurve = {
-  iter: number;
+export type EquityWindow = {
+  window: number;
   timestamp: string[];
   equity: number[];
   benchmark: number[];
   split_cutoff: string | null;
 };
+
+export type EquityCurve = {
+  iter: number;
+  windows: EquityWindow[];
+  n_windows: number;
+  // legacy fields mirror the first window for back-compat
+  timestamp: string[];
+  equity: number[];
+  benchmark: number[];
+  split_cutoff: string | null;
+};
+
+export type WfAggregate = {
+  mean_sharpe: number;
+  std_sharpe: number;
+  median_sharpe: number;
+  mean_max_dd: number;
+  worst_max_dd: number;
+  mean_n_trades: number;
+  n_windows: number;
+  window_composites?: number[];
+} | null;
 
 export type Job = {
   id: string;

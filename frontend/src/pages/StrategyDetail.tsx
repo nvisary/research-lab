@@ -23,7 +23,7 @@ const defaultForm: IterForm = {
   start: "2024-01-01",
   end: "2025-10-01",
   tf: "1h",
-  walk: 0,
+  walk: 4,
   note: "",
 };
 
@@ -183,10 +183,39 @@ export function StrategyDetail() {
               <KV k="iter" v={best.iter} />
               <KV k="composite" v={<strong>{fmt(best.composite)}</strong>} />
               <KV k="params" v={<code className="text-slate-300">{JSON.stringify(best.params)}</code>} />
-              <KV k="train sharpe" v={fmt(best.metrics?.train?.sharpe)} />
-              <KV k="OOS sharpe" v={fmt(best.metrics?.oos?.sharpe)} />
-              <KV k="OOS max DD" v={fmtPct(best.metrics?.oos?.max_dd)} />
-              <KV k="OOS trades" v={best.metrics?.oos?.n_trades ?? "—"} />
+              {best.wf_aggregate ? (
+                <>
+                  <KV
+                    k="WF OOS sharpe"
+                    v={
+                      <>
+                        mean <strong>{fmt(best.wf_aggregate.mean_sharpe)}</strong>{" "}
+                        ± {fmt(best.wf_aggregate.std_sharpe)} std,{" "}
+                        median {fmt(best.wf_aggregate.median_sharpe)}
+                      </>
+                    }
+                  />
+                  <KV k="WF max DD" v={<>worst {fmtPct(best.wf_aggregate.worst_max_dd)} • mean {fmtPct(best.wf_aggregate.mean_max_dd)}</>} />
+                  <KV k="WF windows" v={best.wf_aggregate.n_windows} />
+                  {best.wf_aggregate.window_composites && (
+                    <KV
+                      k="per-window composite"
+                      v={
+                        <span className="mono text-slate-300">
+                          [{best.wf_aggregate.window_composites.map((c) => fmt(c, 2)).join(", ")}]
+                        </span>
+                      }
+                    />
+                  )}
+                </>
+              ) : (
+                <>
+                  <KV k="train sharpe" v={fmt(best.metrics?.train?.sharpe)} />
+                  <KV k="OOS sharpe" v={fmt(best.metrics?.oos?.sharpe)} />
+                  <KV k="OOS max DD" v={fmtPct(best.metrics?.oos?.max_dd)} />
+                  <KV k="OOS trades" v={best.metrics?.oos?.n_trades ?? "—"} />
+                </>
+              )}
               <KV k="symbols" v={best.symbols.join(", ")} />
               <KV k="period" v={best.period.join(" → ")} />
               <KV k="note" v={best.note || "—"} />

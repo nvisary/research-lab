@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from harness import backtest as bt
-from harness.metrics import composite_score
+from harness.metrics import aggregate_wf_composite, composite_score
 
 
 # --------------------------------------------------------------------------- #
@@ -40,7 +40,8 @@ class IterationConfig:
     period_start: str = "2024-01-01"
     period_end: str = "2025-10-01"
     tf: str = "1h"
-    walk_windows: int = 0
+    walk_windows: int = 4   # 4 walk-forward windows ~5mo each on the default period
+    stability_penalty: float = 0.5
     dd_penalty: float = 0.5
     min_trades: int = 50
     low_trades_penalty: float = 0.5
@@ -102,37 +103,80 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         result = {"main": {"train": {}, "oos": {}}}
     finished = datetime.now(timezone.utc).isoformat()
 
-    # Persist equity curve for the dashboard
+    # Persist equity curve(s) for the dashboard.
+    # WF mode: concatenate all window curves into one file with a `window` column
+    # so the frontend can color them; cutoffs become a list. Single-split mode:
+    # behaves as before.
     curves = result.pop("curves", None) if isinstance(result, dict) else None
+    wf_curves = (result.get("walk_forward") or {}).pop("curves", None)
     equity_dir = runs / "equity"
     equity_dir.mkdir(exist_ok=True)
     equity_path = None
-    if curves is not None:
+
+    def _curve_to_df(c, window: int | None = None):
         import pandas as _pd
-        eq = curves["equity"]
+        eq = c["equity"]
         cols = {
             "timestamp": eq.index,
             "equity": eq.values,
-            "benchmark": curves["benchmark"].reindex(eq.index).values,
+            "benchmark": c["benchmark"].reindex(eq.index).values,
         }
-        if curves.get("raw_equity") is not None:
-            cols["raw_equity"] = curves["raw_equity"].reindex(eq.index).values
-        if curves.get("funding_cashflow") is not None:
-            cols["funding_cashflow"] = curves["funding_cashflow"].reindex(eq.index).values
-        df_curve = _pd.DataFrame(cols)
+        if c.get("raw_equity") is not None:
+            cols["raw_equity"] = c["raw_equity"].reindex(eq.index).values
+        if c.get("funding_cashflow") is not None:
+            cols["funding_cashflow"] = c["funding_cashflow"].reindex(eq.index).values
+        df = _pd.DataFrame(cols)
+        if window is not None:
+            df["window"] = window
+        return df
+
+    cutoffs: list[str] = []
+    if wf_curves:
+        import pandas as _pd
+        frames = [_curve_to_df(c, window=i) for i, c in enumerate(wf_curves)]
+        df_curve = _pd.concat(frames, ignore_index=True)
         equity_path = equity_dir / f"iter_{iter_id:04d}.parquet"
         df_curve.to_parquet(equity_path, compression="zstd", index=False)
-        # Also remember the train/OOS split cutoff for shading the chart
-        cutoff_path = equity_dir / f"iter_{iter_id:04d}.json"
-        cutoff_path.write_text(json.dumps({"split_cutoff": str(curves["split_cutoff"])}))
+        cutoffs = [str(c["split_cutoff"]) for c in wf_curves]
+        (equity_dir / f"iter_{iter_id:04d}.json").write_text(
+            json.dumps({"split_cutoffs": cutoffs}, indent=2)
+        )
+    elif curves is not None:
+        df_curve = _curve_to_df(curves)
+        equity_path = equity_dir / f"iter_{iter_id:04d}.parquet"
+        df_curve.to_parquet(equity_path, compression="zstd", index=False)
+        cutoffs = [str(curves["split_cutoff"])]
+        (equity_dir / f"iter_{iter_id:04d}.json").write_text(
+            json.dumps({"split_cutoff": cutoffs[0], "split_cutoffs": cutoffs}, indent=2)
+        )
 
-    oos = result.get("main", {}).get("oos", {}) or {}
-    composite = composite_score(
-        oos,
-        dd_penalty=cfg.dd_penalty,
-        min_trades=cfg.min_trades,
-        low_trades_penalty=cfg.low_trades_penalty,
-    ) if oos and not error else float("-inf")
+    # Composite: WF aggregate when we have multiple windows, else the old
+    # single-OOS rule. Both keep the n_trades=0 -> -inf safety.
+    wf_block = result.get("walk_forward") or {}
+    wf_windows = wf_block.get("windows") or []
+    wf_oos = [w.get("oos", {}) for w in wf_windows]
+    if wf_oos and not error:
+        composite, wf_agg = aggregate_wf_composite(
+            wf_oos,
+            dd_penalty=cfg.dd_penalty,
+            min_trades=cfg.min_trades,
+            low_trades_penalty=cfg.low_trades_penalty,
+            stability_penalty=cfg.stability_penalty,
+        )
+        oos = {
+            "sharpe": wf_agg["mean_sharpe"],
+            "max_dd": wf_agg["worst_max_dd"],
+            "n_trades": int(wf_agg["mean_n_trades"]),
+        }
+    else:
+        oos = result.get("main", {}).get("oos", {}) or {}
+        wf_agg = None
+        composite = composite_score(
+            oos,
+            dd_penalty=cfg.dd_penalty,
+            min_trades=cfg.min_trades,
+            low_trades_penalty=cfg.low_trades_penalty,
+        ) if oos and not error else float("-inf")
 
     best = _load_best(runs)
     best_score = best["composite"] if best else float("-inf")
@@ -148,6 +192,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             "period": result.get("period"),
             "metrics": result.get("main"),
             "walk_forward": result.get("walk_forward"),
+            "wf_aggregate": wf_agg,
             "note": note,
             "saved_at": finished,
         }
@@ -173,6 +218,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
                     "period": result.get("period"),
                     "metrics": result.get("main"),
                     "walk_forward": result.get("walk_forward"),
+                    "wf_aggregate": wf_agg,
                     "note": note + " [adopted as initial baseline]",
                     "saved_at": finished,
                 }
@@ -190,6 +236,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "metrics_oos": oos,
         "metrics_train": result.get("main", {}).get("train", {}),
         "walk_forward": result.get("walk_forward"),
+        "wf_aggregate": wf_agg,
         "note": note,
         "error": error,
     }
@@ -215,7 +262,8 @@ def main() -> None:
     ap.add_argument("--start", default="2024-01-01")
     ap.add_argument("--end", default="2025-10-01")
     ap.add_argument("--tf", default="1h")
-    ap.add_argument("--walk", type=int, default=0)
+    ap.add_argument("--walk", type=int, default=4,
+                    help="Number of walk-forward windows (1 == single train/OOS split).")
     ap.add_argument("--dd-penalty", type=float, default=0.5)
     ap.add_argument("--min-trades", type=int, default=50)
     ap.add_argument("--epsilon", type=float, default=0.01)

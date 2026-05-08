@@ -39,6 +39,12 @@ Three layers, in this order:
 | **OOS / Val** | ~2025-05 → 2025-09-30      | composite score (keep/revert) | ✅   |
 | **Holdout** | 2025-10-01 → 2026-04-30       | manual sanity only     | 🚫 (during iteration) |
 
+**Walk-forward by default.** `runner.iterate` runs 4 walk-forward windows over
+the train+val period; each window has its own train/OOS split. The composite
+score is `mean(window_composites) − 0.5·std(window_composites)`, so a strategy
+whose Sharpe is consistent across 4 windows beats one with the same mean Sharpe
+driven by a single lucky window. Use `--walk 1` to fall back to a single split.
+
 The `runner.iterate` command always runs over `[period_start, period_end)`, defaulting to `2024-01-01 → 2025-10-01`. The harness internally splits that range 75% / 25% into train / OOS. The composite score that decides keep/revert is computed **only on OOS**.
 
 The **holdout** is a separate region. `runner.iterate` does **not** touch it. `runner.holdout` does, but writes only to `runs/holdout/`, never to `best.json` or `history.jsonl`. Treat holdout as a final exam — looked at once, before declaring victory.

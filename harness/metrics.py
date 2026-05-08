@@ -96,8 +96,57 @@ def composite_score(metrics: dict, dd_penalty: float = 0.5,
     dd = metrics.get("max_dd", 0.0)
     n = metrics.get("n_trades", 0)
     if n == 0:
-        return float("-inf")  # ineligible: a strategy that never trades is not a strategy
+        return float("-inf")
     score = sh - dd_penalty * dd
     if n < min_trades:
         score -= low_trades_penalty
     return float(score)
+
+
+def aggregate_wf_composite(window_metrics: list[dict],
+                           dd_penalty: float = 0.5,
+                           min_trades: int = 50,
+                           low_trades_penalty: float = 0.5,
+                           stability_penalty: float = 0.5) -> tuple[float, dict]:
+    """Aggregate a list of per-window OOS metric dicts into a single composite.
+
+    score = mean(window_composites) − stability_penalty · std(window_composites)
+
+    The standard-deviation term rewards strategies whose OOS Sharpe is consistent
+    across windows over those whose mean Sharpe is the same but driven by one
+    lucky window. ``-∞`` is returned if any window scored ``-∞`` (e.g. zero
+    trades) — we don't want to average an unbounded-bad result.
+
+    Returns
+    -------
+    (score, agg) where agg is a dict of summary stats: mean_sharpe, std_sharpe,
+    median_sharpe, mean_max_dd, worst_max_dd, mean_n_trades, n_windows.
+    """
+    import numpy as np
+
+    composites = [composite_score(m, dd_penalty, min_trades, low_trades_penalty)
+                  for m in window_metrics]
+    if not composites or any(c == float("-inf") for c in composites):
+        return float("-inf"), {
+            "mean_sharpe": 0.0, "std_sharpe": 0.0, "median_sharpe": 0.0,
+            "mean_max_dd": 0.0, "worst_max_dd": 0.0,
+            "mean_n_trades": 0.0, "n_windows": len(window_metrics),
+        }
+
+    mean_c = float(np.mean(composites))
+    std_c = float(np.std(composites, ddof=0))
+    score = mean_c - stability_penalty * std_c
+
+    sharpes = [m.get("sharpe", 0.0) for m in window_metrics]
+    dds = [m.get("max_dd", 0.0) for m in window_metrics]
+    trades = [m.get("n_trades", 0) for m in window_metrics]
+    return score, {
+        "mean_sharpe": float(np.mean(sharpes)),
+        "std_sharpe": float(np.std(sharpes, ddof=0)),
+        "median_sharpe": float(np.median(sharpes)),
+        "mean_max_dd": float(np.mean(dds)),
+        "worst_max_dd": float(np.max(dds)),
+        "mean_n_trades": float(np.mean(trades)),
+        "n_windows": len(window_metrics),
+        "window_composites": composites,
+    }

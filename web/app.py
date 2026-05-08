@@ -201,20 +201,43 @@ def api_equity(name: str, iter_id: int):
     if not p.exists():
         raise HTTPException(404, f"no equity for iter {iter_id}")
     df = pd.read_parquet(p)
-    cutoff = None
+
+    cutoffs: list[str] = []
     cp = d / "runs" / "equity" / f"iter_{iter_id:04d}.json"
     if cp.exists():
         try:
-            cutoff = json.loads(cp.read_text())["split_cutoff"]
+            j = json.loads(cp.read_text())
+            cutoffs = j.get("split_cutoffs") or ([j["split_cutoff"]] if j.get("split_cutoff") else [])
         except Exception:
             pass
+
+    has_windows = "window" in df.columns
+    windows = []
+    groups = df.groupby("window") if has_windows else [(0, df)]
+    for w, g in groups:
+        g = g.sort_values("timestamp")
+        ts = pd.to_datetime(g["timestamp"], utc=True)
+        item = {
+            "window": int(w),
+            "timestamp": [t.isoformat() for t in ts],
+            "equity": g["equity"].tolist(),
+            "benchmark": g["benchmark"].tolist(),
+            "split_cutoff": cutoffs[int(w)] if int(w) < len(cutoffs) else None,
+        }
+        windows.append(item)
+
+    # Back-compat fields (single-window callers can keep using these for the
+    # first window without checking has_windows).
+    head = windows[0] if windows else {}
     return _sanitize({
         "iter": iter_id,
-        "timestamp": [t.isoformat() if hasattr(t, "isoformat") else str(t)
-                      for t in pd.to_datetime(df["timestamp"], utc=True)],
-        "equity": df["equity"].tolist(),
-        "benchmark": df["benchmark"].tolist(),
-        "split_cutoff": cutoff,
+        "windows": windows,
+        "n_windows": len(windows),
+        # legacy fields, mirror the first window
+        "timestamp": head.get("timestamp", []),
+        "equity": head.get("equity", []),
+        "benchmark": head.get("benchmark", []),
+        "split_cutoff": head.get("split_cutoff"),
     })
 
 

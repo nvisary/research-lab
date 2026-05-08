@@ -12,7 +12,8 @@ type Props = {
   highlightIter?: number;
 };
 
-/** equity -> drawdown as a fraction in [-1, 0]: dd_t = equity_t / max(equity_{0..t}) - 1 */
+const WINDOW_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6"];
+
 function drawdownSeries(equity: number[]): number[] {
   const out = new Array<number>(equity.length);
   let peak = -Infinity;
@@ -23,49 +24,65 @@ function drawdownSeries(equity: number[]): number[] {
   return out;
 }
 
-function maxDrawdown(dd: number[]): number {
-  let m = 0;
-  for (const v of dd) if (v < m) m = v;
-  return m; // negative
-}
+const maxDD = (dd: number[]): number => dd.reduce((m, v) => (v < m ? v : m), 0);
 
 export function DrawdownChart({ curves, highlightIter }: Props) {
   if (curves.length === 0) {
     return <div className="text-slate-500 italic">no equity yet</div>;
   }
-  const cutoff = curves[0].data.split_cutoff;
   const single = curves.length === 1;
-
   const traces: any[] = [];
+  const cutoffs: string[] = [];
+
   for (const c of curves) {
-    const dd = drawdownSeries(c.data.equity);
-    const maxDD = maxDrawdown(dd);
-    traces.push({
-      x: c.data.timestamp,
-      y: dd,
-      mode: "lines",
-      type: "scatter",
-      name: `iter ${c.iter} (${c.verdict}) — DD ${(maxDD * 100).toFixed(1)}%`,
-      // For single-series view, fill the area to make the underwater plot obvious.
-      fill: single ? "tozeroy" : undefined,
-      fillcolor: single ? "rgba(239, 68, 68, 0.18)" : undefined,
-      line: {
-        color: single ? "#ef4444" : undefined,
-        width: c.iter === highlightIter ? 2.2 : single ? 1.5 : 1,
-      },
-    });
-  }
-  if (single) {
-    const ddBench = drawdownSeries(curves[0].data.benchmark);
-    const maxDDBench = maxDrawdown(ddBench);
-    traces.push({
-      x: curves[0].data.timestamp,
-      y: ddBench,
-      mode: "lines",
-      type: "scatter",
-      name: `buy & hold — DD ${(maxDDBench * 100).toFixed(1)}%`,
-      line: { color: "#94a3b8", dash: "dot", width: 1.5 },
-    });
+    const windows = c.data.windows && c.data.windows.length > 0
+      ? c.data.windows
+      : [{
+          window: 0,
+          timestamp: c.data.timestamp,
+          equity: c.data.equity,
+          benchmark: c.data.benchmark,
+          split_cutoff: c.data.split_cutoff,
+        }];
+
+    for (const w of windows) {
+      const dd = drawdownSeries(w.equity);
+      const md = maxDD(dd);
+      const color = single ? WINDOW_COLORS[w.window % WINDOW_COLORS.length] : undefined;
+      traces.push({
+        x: w.timestamp,
+        y: dd,
+        mode: "lines",
+        type: "scatter",
+        name: single
+          ? (windows.length > 1
+              ? `w${w.window} — DD ${(md * 100).toFixed(1)}%`
+              : `strategy — DD ${(md * 100).toFixed(1)}%`)
+          : `iter ${c.iter} (${c.verdict}) — DD ${(md * 100).toFixed(1)}%`,
+        legendgroup: single ? `w${w.window}` : `i${c.iter}`,
+        // Fill only when there's exactly one window in single-strategy mode,
+        // otherwise overlapping fills become unreadable.
+        fill: single && windows.length === 1 ? "tozeroy" : undefined,
+        fillcolor: single && windows.length === 1 ? "rgba(239,68,68,0.18)" : undefined,
+        line: {
+          color,
+          width: c.iter === highlightIter ? 2.2 : single ? 1.6 : 1,
+        },
+      });
+      if (single && windows.length === 1) {
+        const ddBench = drawdownSeries(w.benchmark);
+        const mdBench = maxDD(ddBench);
+        traces.push({
+          x: w.timestamp,
+          y: ddBench,
+          mode: "lines",
+          type: "scatter",
+          name: `buy & hold — DD ${(mdBench * 100).toFixed(1)}%`,
+          line: { color: "#94a3b8", dash: "dot", width: 1.5 },
+        });
+      }
+      if (w.split_cutoff) cutoffs.push(w.split_cutoff);
+    }
   }
 
   return (
@@ -78,7 +95,7 @@ export function DrawdownChart({ curves, highlightIter }: Props) {
         paper_bgcolor: "rgba(0,0,0,0)",
         plot_bgcolor: "rgba(0,0,0,0)",
         font: { color: "#cbd5e1", size: 11 },
-        margin: { t: 10, b: 36, l: 60, r: 10 },
+        margin: { t: 10, b: 40, l: 60, r: 10 },
         xaxis: { gridcolor: "#334155" },
         yaxis: {
           title: { text: "drawdown" },
@@ -87,19 +104,15 @@ export function DrawdownChart({ curves, highlightIter }: Props) {
           rangemode: "nonpositive",
         },
         legend: { orientation: "h", y: -0.22 },
-        shapes: cutoff
-          ? [
-              {
-                type: "line",
-                x0: cutoff,
-                x1: cutoff,
-                yref: "paper",
-                y0: 0,
-                y1: 1,
-                line: { color: "#ef4444", dash: "dash", width: 1 },
-              },
-            ]
-          : [],
+        shapes: cutoffs.map((c) => ({
+          type: "line" as const,
+          x0: c,
+          x1: c,
+          yref: "paper" as const,
+          y0: 0,
+          y1: 1,
+          line: { color: "#ef4444", dash: "dash" as const, width: 1 },
+        })),
       }}
     />
   );

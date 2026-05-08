@@ -131,6 +131,26 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             df["window"] = window
         return df
 
+    # Trade ledger: concat across windows with a `window` column for analysis.
+    trades_dir = runs / "trades"
+    trades_dir.mkdir(exist_ok=True)
+    if wf_curves and any(c.get("trades") is not None and not c["trades"].empty for c in wf_curves):
+        import pandas as _pd
+        frames = []
+        for i, c in enumerate(wf_curves):
+            t = c.get("trades")
+            if t is not None and not t.empty:
+                tt = t.copy()
+                tt["window"] = i
+                frames.append(tt)
+        if frames:
+            df_trades = _pd.concat(frames, ignore_index=True)
+            df_trades.to_parquet(trades_dir / f"iter_{iter_id:04d}.parquet",
+                                 compression="zstd", index=False)
+    elif curves is not None and curves.get("trades") is not None and not curves["trades"].empty:
+        curves["trades"].to_parquet(trades_dir / f"iter_{iter_id:04d}.parquet",
+                                     compression="zstd", index=False)
+
     cutoffs: list[str] = []
     if wf_curves:
         import pandas as _pd

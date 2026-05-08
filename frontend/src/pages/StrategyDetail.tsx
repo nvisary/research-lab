@@ -10,6 +10,7 @@ import {
 import { fmt, fmtPct, probabilityClass, verdictClass } from "../format";
 import { EquityChart } from "../components/EquityChart";
 import { DrawdownChart } from "../components/DrawdownChart";
+import { TradesCard } from "../components/TradesCard";
 
 type IterForm = {
   start: string;
@@ -315,6 +316,10 @@ export function StrategyDetail() {
 
       <Card title="Drawdown (underwater)">
         <DrawdownChart curves={curves} highlightIter={selectedIter ?? undefined} />
+      </Card>
+
+      <Card title="Trades">
+        <TradesCard strategy={name} iter={selectedIter} />
       </Card>
 
       <Card title="Run new iteration">

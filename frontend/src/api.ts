@@ -119,6 +119,40 @@ export type HoldoutReport = {
   equity: { timestamp: string[]; equity: number[]; benchmark: number[] } | null;
 } | null;
 
+export type TradeRow = {
+  entry_time: string;
+  exit_time: string;
+  symbol: string;
+  direction: "Long" | "Short" | string;
+  size: number;
+  entry_price: number;
+  exit_price: number;
+  pnl_quote: number;
+  return_pct: number;
+  duration_hours: number;
+  slice: "train" | "oos" | string;
+  window: number;
+};
+
+export type TradesPayload = {
+  iter: number;
+  summary: {
+    n_trades: number;
+    n_wins?: number;
+    n_losses?: number;
+    win_rate?: number;
+    avg_win?: number;
+    avg_loss?: number;
+    payoff_ratio?: number;
+    total_pnl?: number;
+    median_duration_hours?: number;
+  };
+  rows: TradeRow[];
+  row_count_total: number;
+  top_winners: TradeRow[];
+  top_losers: TradeRow[];
+};
+
 export const api = {
   strategies: () => j<StrategySummary[]>("/api/strategies"),
   strategy: (name: string) => j<StrategyDetail>(`/api/strategies/${name}`),
@@ -141,5 +175,7 @@ export const api = {
     }),
   holdoutReport: (name: string) =>
     j<HoldoutReport>(`/api/strategies/${name}/holdout`),
+  trades: (name: string, iter: number) =>
+    j<TradesPayload>(`/api/strategies/${name}/trades/${iter}`),
   job: (id: string) => j<Job>(`/api/jobs/${id}`),
 };

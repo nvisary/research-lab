@@ -159,6 +159,42 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         oos_mask = (adj_equity_full.index >= split.oos_start) & \
                    (adj_equity_full.index < split.oos_end)
         out["oos_returns"] = adj_returns_full[oos_mask]
+
+        # Standardized trade ledger for the dashboard / per-iter analysis.
+        try:
+            tr = pf.trades.records_readable.copy()
+            if not tr.empty:
+                rename = {
+                    "Entry Timestamp": "entry_time",
+                    "Exit Timestamp": "exit_time",
+                    "Avg Entry Price": "entry_price",
+                    "Avg Exit Price": "exit_price",
+                    "Size": "size",
+                    "Direction": "direction",
+                    "PnL": "pnl_quote",
+                    "Return": "return_pct",
+                    "Column": "symbol",
+                }
+                tr = tr.rename(columns={k: v for k, v in rename.items() if k in tr.columns})
+                tr["entry_time"] = pd.to_datetime(tr["entry_time"], utc=True)
+                tr["exit_time"] = pd.to_datetime(tr["exit_time"], utc=True)
+                tr["duration_hours"] = (tr["exit_time"] - tr["entry_time"]).dt.total_seconds() / 3600.0
+                if "symbol" in tr.columns:
+                    tr["symbol"] = tr["symbol"].apply(
+                        lambda c: c[-1] if isinstance(c, tuple) else c)
+                # Tag the slice each trade belongs to for window-aware analysis.
+                tr["slice"] = pd.Series(
+                    np.where(tr["entry_time"] < split.train_end, "train", "oos"),
+                    index=tr.index,
+                )
+                keep_cols = [c for c in [
+                    "entry_time", "exit_time", "symbol", "direction",
+                    "size", "entry_price", "exit_price",
+                    "pnl_quote", "return_pct", "duration_hours", "slice",
+                ] if c in tr.columns]
+                out["trades"] = tr[keep_cols].reset_index(drop=True)
+        except Exception:
+            out["trades"] = pd.DataFrame()
     return out
 
 
@@ -187,6 +223,7 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
             "raw_equity": main.pop("raw_equity", None),
             "funding_cashflow": main.pop("funding_cashflow", None),
             "oos_returns": main.pop("oos_returns", None),
+            "trades": main.pop("trades", None),
         }
 
     result = {
@@ -212,6 +249,7 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
                     "raw_equity": w.pop("raw_equity", None),
                     "funding_cashflow": w.pop("funding_cashflow", None),
                     "oos_returns": w.pop("oos_returns", None),
+                    "trades": w.pop("trades", None),
                 })
             windows.append(w)
         result["walk_forward"] = {"windows": windows}

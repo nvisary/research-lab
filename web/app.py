@@ -265,6 +265,63 @@ def api_iterate(name: str, body: IterateRequest):
     return job.to_json()
 
 
+@app.get("/api/strategies/{name}/trades/{iter_id}")
+def api_trades(name: str, iter_id: int):
+    """Return trade ledger for an iteration plus quick summary stats.
+
+    Capped at 1000 rows in the response to keep the dashboard fast; the
+    full ledger remains on disk at runs/trades/iter_NNNN.parquet.
+    """
+    d = _strategy_dir(name)
+    p = d / "runs" / "trades" / f"iter_{iter_id:04d}.parquet"
+    if not p.exists():
+        raise HTTPException(404, f"no trades for iter {iter_id}")
+    df = pd.read_parquet(p)
+    n_total = len(df)
+
+    if "pnl_quote" in df.columns and not df.empty:
+        wins = df[df["pnl_quote"] > 0]
+        losses = df[df["pnl_quote"] < 0]
+        summary = {
+            "n_trades": n_total,
+            "n_wins": int(len(wins)),
+            "n_losses": int(len(losses)),
+            "win_rate": float(len(wins) / n_total) if n_total else 0.0,
+            "avg_win": float(wins["pnl_quote"].mean()) if len(wins) else 0.0,
+            "avg_loss": float(losses["pnl_quote"].mean()) if len(losses) else 0.0,
+            "payoff_ratio": (float(wins["pnl_quote"].mean() / -losses["pnl_quote"].mean())
+                             if len(wins) and len(losses) else 0.0),
+            "total_pnl": float(df["pnl_quote"].sum()),
+            "median_duration_hours": float(df.get("duration_hours", pd.Series([0.0])).median()),
+        }
+    else:
+        summary = {"n_trades": n_total}
+
+    head = df.sort_values("pnl_quote", ascending=False, na_position="last").head(20) \
+        if "pnl_quote" in df.columns else df.head(20)
+    tail = df.sort_values("pnl_quote", ascending=True, na_position="last").head(20) \
+        if "pnl_quote" in df.columns else df.tail(20)
+    rows = df.head(1000)
+
+    def _to_records(frame: pd.DataFrame) -> list[dict]:
+        out_rows = []
+        for r in frame.to_dict(orient="records"):
+            for k, v in list(r.items()):
+                if isinstance(v, pd.Timestamp):
+                    r[k] = v.isoformat()
+            out_rows.append(r)
+        return out_rows
+
+    return _sanitize({
+        "iter": iter_id,
+        "summary": summary,
+        "rows": _to_records(rows),
+        "row_count_total": n_total,
+        "top_winners": _to_records(head),
+        "top_losers": _to_records(tail),
+    })
+
+
 class HoldoutRequest(BaseModel):
     start: str = "2025-10-01"
     end: str = "2026-05-01"

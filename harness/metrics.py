@@ -148,11 +148,16 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
 
 def composite_score(metrics: dict, dd_penalty: float = 0.5,
                     min_trades: int = 50, low_trades_penalty: float = 0.5) -> float:
-    """OOS_Sharpe − λ·MaxDD with low-activity penalty.
+    """OOS_Sharpe − λ·MaxDD with smooth low-activity penalty.
 
-    Strategies with fewer than `min_trades` get a flat penalty so the agent
-    cannot cheat by holding a single lucky position.
+    Below ``min_trades`` we apply a graded penalty
+        ``low_trades_penalty * (1 - sqrt(n / min_trades))``
+    so a strategy with 49 trades is essentially unpenalized while a strategy
+    with 5 trades pays roughly 2/3 of the full penalty. The previous version
+    was a step function (-0.5 if n<50, 0 otherwise), which created a 0.5-point
+    cliff at exactly 49 trades. n=0 remains ``-∞`` (ineligible).
     """
+    import math
     sh = metrics.get("sharpe", 0.0)
     dd = metrics.get("max_dd", 0.0)
     n = metrics.get("n_trades", 0)
@@ -160,7 +165,8 @@ def composite_score(metrics: dict, dd_penalty: float = 0.5,
         return float("-inf")
     score = sh - dd_penalty * dd
     if n < min_trades:
-        score -= low_trades_penalty
+        deficit = 1.0 - math.sqrt(n / min_trades)
+        score -= low_trades_penalty * deficit
     return float(score)
 
 

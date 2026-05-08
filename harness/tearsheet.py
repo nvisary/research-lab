@@ -327,9 +327,40 @@ th, td {{ padding: 6px 10px; text-align: left; border-bottom: 1px solid #334155;
 .dim {{ color: #64748b; }}
 .row2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
 @media (max-width: 800px) {{ .row2 {{ grid-template-columns: 1fr; }} }}
+
+/* Floating action bar — visible on screen, hidden in print so it doesn't
+   bleed into the PDF. */
+.actions {{
+  position: fixed; top: 16px; right: 16px; z-index: 1000;
+  display: flex; gap: 8px;
+}}
+.actions button {{
+  background: #3b82f6; color: white; border: 0; border-radius: 6px;
+  padding: 8px 14px; font: 600 13px/1 inherit; cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}}
+.actions button:hover {{ background: #2563eb; }}
+
+@media print {{
+  /* Hide interactive controls. Background stays dark — most PDF viewers
+     and modern printers handle dark themes. If you need a light export
+     toggle the OS print dialog's "Background graphics" off. */
+  .actions {{ display: none; }}
+  body {{ background: #0f172a; color: #e2e8f0; -webkit-print-color-adjust: exact;
+          print-color-adjust: exact; }}
+  main {{ max-width: 100%; margin: 0; padding: 16px; }}
+  /* Avoid splitting a chart or a small section across pages. */
+  section, .row2 > section {{ page-break-inside: avoid; break-inside: avoid; }}
+  h1, h2 {{ page-break-after: avoid; }}
+  h1 {{ font-size: 18px; }}
+}}
+@page {{ size: A4 portrait; margin: 12mm; }}
 </style>
 </head>
 <body>
+<div class="actions">
+  <button onclick="window.print()" title="Browser dialog → 'Save as PDF'">📄 Download PDF</button>
+</div>
 <main>
 <h1>Tear sheet — iter {iter_id} <span class="dim" style="font-size:14px">({iter_data.get("verdict","")})</span></h1>
 

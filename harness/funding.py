@@ -57,18 +57,31 @@ def funding_cashflows(asset_value: pd.DataFrame, start, end) -> pd.Series:
         if f.empty:
             continue
 
-        # Snap each funding event onto the next portfolio bar at-or-after the
-        # event time. searchsorted with side='left' gives that index.
-        positions = bar_index.searchsorted(f.index, side="left")
-        valid = positions < len(bar_index)
-        positions = positions[valid]
-        rates = f["rate"].values[valid]
-        bar_ts = bar_index[positions]
+        # Assign each funding event to the latest bar at or before the event's
+        # timestamp. merge_asof(direction='backward') matches each row in the
+        # left frame to the largest right-frame key satisfying right_key
+        # <= left_key. Compared to bar_index.searchsorted(side='left'), this
+        # is unambiguous when the event falls between two bars or shares a
+        # boundary with one (e.g. funding ts 08:00:00.500 with 5m bars at
+        # 08:00 / 08:05 — the event happens during the 08:00 bar's window).
+        events = pd.DataFrame({"funding_ts": f.index, "rate": f["rate"].values})
+        bars = pd.DataFrame({
+            "bar_ts": bar_index,
+            "notional": asset_value[col].fillna(0.0).values,
+        })
+        joined = pd.merge_asof(
+            events.sort_values("funding_ts"),
+            bars.sort_values("bar_ts"),
+            left_on="funding_ts",
+            right_on="bar_ts",
+            direction="backward",
+        ).dropna(subset=["bar_ts"])
+        if joined.empty:
+            continue
 
-        # Notional held at the assigned bar; long positive, short negative.
-        notionals = asset_value[col].reindex(bar_ts).fillna(0.0).values
-        contrib = pd.Series(notionals * rates, index=bar_ts).groupby(level=0).sum()
-        out = out.add(contrib, fill_value=0.0)
+        joined["cashflow"] = joined["notional"] * joined["rate"]
+        per_bar = joined.groupby("bar_ts")["cashflow"].sum()
+        out = out.add(per_bar, fill_value=0.0)
 
     return out.reindex(bar_index, fill_value=0.0)
 

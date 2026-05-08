@@ -16,6 +16,9 @@ export type Metrics = {
   hit_rate?: number;
   n_trades?: number;
   n_periods?: number;
+  psr?: number;
+  sharpe_ci_lo?: number;
+  sharpe_ci_hi?: number;
 };
 
 export type HistoryRow = {
@@ -27,6 +30,7 @@ export type HistoryRow = {
   metrics_oos: Metrics;
   metrics_train: Metrics;
   wf_aggregate: WfAggregate;
+  dsr: number | null;
   note: string;
   finished: string;
   error: string | null;
@@ -41,6 +45,7 @@ export type Best = {
   period: [string, string];
   metrics: { train: Metrics; oos: Metrics };
   wf_aggregate: WfAggregate;
+  dsr: number | null;
   note: string;
   saved_at: string;
 } | null;

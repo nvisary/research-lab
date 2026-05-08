@@ -4,6 +4,13 @@ export const fmt = (x: number | null | undefined, n = 4): string =>
 export const fmtPct = (x: number | null | undefined, n = 2): string =>
   x === null || x === undefined || Number.isNaN(x) ? "—" : `${(Number(x) * 100).toFixed(n)}%`;
 
+export const probabilityClass = (p: number | null | undefined): string => {
+  if (p === null || p === undefined || Number.isNaN(p)) return "text-slate-500";
+  if (p >= 0.95) return "text-emerald-400 font-semibold";
+  if (p >= 0.5) return "text-amber-400";
+  return "text-rose-400";
+};
+
 export const verdictClass = (v: string): string => {
   const k = v.toLowerCase();
   if (k === "keep" || k === "baseline") return "bg-emerald-500/10 text-emerald-400";

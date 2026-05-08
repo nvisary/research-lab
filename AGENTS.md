@@ -153,9 +153,10 @@ A strategy that maximizes composite while failing these is suspect:
 - **Trade count** — fewer than ~50 trades on 21 months is a sample-size red flag, even after the penalty.
 - **Holdout** (only after you stop iterating) — the truth.
 
-When you have access to it, also think about:
-- **Probabilistic Sharpe Ratio (PSR)** — probability that observed Sharpe exceeds a benchmark given sample size and skew/kurt.
-- **Deflated Sharpe Ratio (DSR)** — PSR adjusted for the number of trials in your selection process.
+**Computed automatically and shown on the dashboard:**
+- **Probabilistic Sharpe Ratio (PSR)** — probability that observed Sharpe exceeds 0 given sample size, skew, and kurtosis. Per-window, in `metrics.oos.psr`. PSR > 0.95 = strong signal even adjusted for short samples.
+- **Deflated Sharpe Ratio (DSR)** — PSR adjusted for the number of trials in your selection process (current iter count). Top-level field in `best.json` and history. Watch DSR fall as you iterate even if composite rises — that's the selection-bias tax made visible. DSR < 0.5 = the best is most likely a noise-fit artifact.
+- **Bootstrap Sharpe CI** — stationary block bootstrap (Politis-Romano), per-window in `metrics.oos.sharpe_ci_lo / _hi`. If the lower bound includes 0, the result is statistically indistinguishable from luck.
 
 ---
 

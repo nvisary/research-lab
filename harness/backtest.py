@@ -154,6 +154,11 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         out["funding_cashflow"] = fcf
         out["benchmark"] = bench
         out["split_cutoff"] = split.train_end
+        # OOS returns slice — used by iterate.py to compute DSR/PSR/CI on the
+        # same series as composite, post-funding-adjustment.
+        oos_mask = (adj_equity_full.index >= split.oos_start) & \
+                   (adj_equity_full.index < split.oos_end)
+        out["oos_returns"] = adj_returns_full[oos_mask]
     return out
 
 
@@ -181,6 +186,7 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
             "split_cutoff": main.pop("split_cutoff"),
             "raw_equity": main.pop("raw_equity", None),
             "funding_cashflow": main.pop("funding_cashflow", None),
+            "oos_returns": main.pop("oos_returns", None),
         }
 
     result = {
@@ -205,6 +211,7 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
                     "split_cutoff": w.pop("split_cutoff"),
                     "raw_equity": w.pop("raw_equity", None),
                     "funding_cashflow": w.pop("funding_cashflow", None),
+                    "oos_returns": w.pop("oos_returns", None),
                 })
             windows.append(w)
         result["walk_forward"] = {"windows": windows}

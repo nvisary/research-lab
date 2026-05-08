@@ -7,7 +7,7 @@ import {
   type Job,
   type StrategyDetail as Detail,
 } from "../api";
-import { fmt, fmtPct, verdictClass } from "../format";
+import { fmt, fmtPct, probabilityClass, verdictClass } from "../format";
 import { EquityChart } from "../components/EquityChart";
 import { DrawdownChart } from "../components/DrawdownChart";
 
@@ -182,6 +182,14 @@ export function StrategyDetail() {
             <tbody>
               <KV k="iter" v={best.iter} />
               <KV k="composite" v={<strong>{fmt(best.composite)}</strong>} />
+              <KV
+                k="DSR"
+                v={
+                  <span className={probabilityClass(best.dsr)} title="Deflated Sharpe Ratio: probability of true edge given the number of trials.">
+                    {fmt(best.dsr, 3)}
+                  </span>
+                }
+              />
               <KV k="params" v={<code className="text-slate-300">{JSON.stringify(best.params)}</code>} />
               {best.wf_aggregate ? (
                 <>
@@ -368,7 +376,8 @@ export function StrategyDetail() {
       <Card title="History">
         {reversedHistory.length === 0 ? (
           <em className="text-slate-500">no iterations yet</em>
-        ) : (
+        ) : null}
+        {reversedHistory.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-slate-400 text-xs uppercase tracking-wider">
@@ -379,6 +388,7 @@ export function StrategyDetail() {
                   <Th>OOS sharpe</Th>
                   <Th>OOS max DD</Th>
                   <Th>OOS trades</Th>
+                  <Th>DSR</Th>
                   <Th>note</Th>
                   <Th>finished</Th>
                 </tr>
@@ -396,6 +406,7 @@ export function StrategyDetail() {
                     <td className="px-3 py-1.5 mono">{fmt(h.metrics_oos?.sharpe)}</td>
                     <td className="px-3 py-1.5 mono">{fmtPct(h.metrics_oos?.max_dd)}</td>
                     <td className="px-3 py-1.5 mono">{h.metrics_oos?.n_trades ?? "—"}</td>
+                    <td className={`px-3 py-1.5 mono ${probabilityClass(h.dsr)}`}>{fmt(h.dsr, 3)}</td>
                     <td className="px-3 py-1.5 text-slate-300">{h.note || ""}</td>
                     <td className="px-3 py-1.5 text-slate-500 text-xs">
                       {h.finished ? new Date(h.finished).toLocaleString() : ""}

@@ -29,6 +29,7 @@ from pathlib import Path
 
 from harness import backtest as bt
 from harness.metrics import aggregate_wf_composite, composite_score
+from harness.stats import deflated_sharpe
 
 
 # --------------------------------------------------------------------------- #
@@ -178,6 +179,43 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             low_trades_penalty=cfg.low_trades_penalty,
         ) if oos and not error else float("-inf")
 
+    # DSR: concatenate OOS returns across whatever windows ran, run deflated
+    # Sharpe with n_trials = iter_id. We pull trial sharpes from history for a
+    # tighter (less conservative) std estimate when we have enough data.
+    dsr_value = 0.0
+    try:
+        import pandas as _pd
+        if wf_curves:
+            oos_returns_concat = _pd.concat(
+                [c["oos_returns"] for c in wf_curves if c.get("oos_returns") is not None]
+            ).sort_index()
+        elif curves is not None and curves.get("oos_returns") is not None:
+            oos_returns_concat = curves["oos_returns"]
+        else:
+            oos_returns_concat = _pd.Series(dtype="float64")
+
+        if len(oos_returns_concat.dropna()) >= 30 and not error:
+            # Trial Sharpes for the variance estimate. Pull from history.jsonl.
+            history_path = runs / "history.jsonl"
+            trial_sharpes: list[float] = []
+            if history_path.exists():
+                with history_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            row = json.loads(line)
+                            sh = (row.get("metrics_oos") or {}).get("sharpe")
+                            if sh is not None:
+                                trial_sharpes.append(float(sh))
+                        except Exception:
+                            pass
+            dsr_value = deflated_sharpe(
+                oos_returns_concat,
+                n_trials=iter_id,
+                trial_sharpes=trial_sharpes if len(trial_sharpes) >= 2 else None,
+            )
+    except Exception:
+        dsr_value = 0.0
+
     best = _load_best(runs)
     best_score = best["composite"] if best else float("-inf")
     keep = composite > best_score + cfg.epsilon and error is None
@@ -193,6 +231,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             "metrics": result.get("main"),
             "walk_forward": result.get("walk_forward"),
             "wf_aggregate": wf_agg,
+            "dsr": dsr_value,
             "note": note,
             "saved_at": finished,
         }
@@ -219,6 +258,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
                     "metrics": result.get("main"),
                     "walk_forward": result.get("walk_forward"),
                     "wf_aggregate": wf_agg,
+                    "dsr": dsr_value,
                     "note": note + " [adopted as initial baseline]",
                     "saved_at": finished,
                 }
@@ -237,6 +277,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "metrics_train": result.get("main", {}).get("train", {}),
         "walk_forward": result.get("walk_forward"),
         "wf_aggregate": wf_agg,
+        "dsr": dsr_value,
         "note": note,
         "error": error,
     }
@@ -250,6 +291,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "oos_sharpe": round(oos.get("sharpe", 0.0), 4),
         "oos_max_dd": round(oos.get("max_dd", 0.0), 4),
         "oos_n_trades": oos.get("n_trades", 0),
+        "dsr": round(dsr_value, 4),
         "error": error,
     }
     return summary

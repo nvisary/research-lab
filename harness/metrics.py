@@ -71,8 +71,16 @@ def hit_rate(returns: pd.Series) -> float:
 
 def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
             n_trades: int) -> dict:
+    # PSR is computed inline; DSR (which needs n_trials) is added by the caller.
+    from harness.stats import psr as _psr, bootstrap_sharpe_ci as _ci
+    sh = sharpe(returns)
+    psr_value = _psr(returns) if len(returns.dropna()) >= 30 else 0.0
+    try:
+        ci_lo, ci_hi = _ci(returns, n_boot=400) if len(returns.dropna()) >= 100 else (sh, sh)
+    except Exception:
+        ci_lo, ci_hi = sh, sh
     return {
-        "sharpe": sharpe(returns),
+        "sharpe": sh,
         "sortino": sortino(returns),
         "calmar": calmar(equity),
         "cagr": cagr(equity),
@@ -82,6 +90,9 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
         "hit_rate": hit_rate(returns),
         "n_trades": int(n_trades),
         "n_periods": int(len(returns)),
+        "psr": float(psr_value),
+        "sharpe_ci_lo": float(ci_lo),
+        "sharpe_ci_hi": float(ci_hi),
     }
 
 

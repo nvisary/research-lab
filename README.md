@@ -38,6 +38,9 @@ cd frontend && npm run build                        # outputs frontend/dist/
 uv run uvicorn web.app:app --port 8000              # http://localhost:8000/
 ```
 
+**New here?** [`GETTING_STARTED.md`](GETTING_STARTED.md) walks from
+fresh-clone to running an LLM-driven research loop with Claude Code.
+
 LLM agents: read [`AGENTS.md`](AGENTS.md) before touching anything. For a catalog of concrete strategy-improvement techniques, see [`METHODS.md`](METHODS.md).
 
 ## Known limitations

@@ -24,6 +24,7 @@ from pathlib import Path
 import pandas as pd
 
 from harness import backtest as bt
+from harness import env as env_mod
 from harness import lookahead as la
 from harness import metrics as M
 from harness.splits import Split
@@ -109,6 +110,7 @@ def run_holdout(strategy_dir: Path, start: str, end: str, tf: str | None = None,
         "composite": composite,
         "best_composite_train_val": (best or {}).get("composite"),
         "audit": audit_summary,
+        "env": env_mod.capture(),
     }
 
     (holdout_dir / f"holdout_iter_{iter_id:04d}.json").write_text(

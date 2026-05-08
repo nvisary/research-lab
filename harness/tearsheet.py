@@ -354,8 +354,15 @@ th, td {{ padding: 6px 10px; text-align: left; border-bottom: 1px solid #334155;
 
 <section><h2>Worst drawdown periods</h2>{worst_html}</section>
 
-<section class="dim" style="font-size:12px">
-generated {datetime.now(timezone.utc).isoformat()} · history depth: {len(history)} iterations
+<section><h2>Environment</h2>
+{_kv_table([
+    ("generated_at", iter_data.get("env", {}).get("generated_at", datetime.now(timezone.utc).isoformat())),
+    ("python", iter_data.get("env", {}).get("python", "—")),
+    ("packages", json.dumps(iter_data.get("env", {}).get("packages", {}), default=str)),
+    ("git", json.dumps(iter_data.get("env", {}).get("git", {}), default=str)),
+    ("dataset_snapshot", iter_data.get("env", {}).get("dataset_snapshot", "—")),
+    ("history depth", f"{len(history)} iterations"),
+])}
 </section>
 </main>
 </body></html>

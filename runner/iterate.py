@@ -31,6 +31,7 @@ from pathlib import Path
 import pandas as pd
 
 from harness import backtest as bt
+from harness import env as env_mod
 from harness import lookahead as la
 from harness import tearsheet as tearsheet_mod
 from harness.metrics import aggregate_wf_composite, composite_score
@@ -228,6 +229,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             "wf_aggregate": None,
             "dsr": 0.0,
             "audit": audit_summary,
+            "env": env_mod.capture(),
             "note": note,
             "error": audit_err,
         }
@@ -404,6 +406,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             "walk_forward": result.get("walk_forward"),
             "wf_aggregate": wf_agg,
             "dsr": dsr_value,
+            "env": env_mod.capture(),
             "note": note,
             "saved_at": finished,
         }
@@ -431,6 +434,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
                     "walk_forward": result.get("walk_forward"),
                     "wf_aggregate": wf_agg,
                     "dsr": dsr_value,
+                    "env": env_mod.capture(),
                     "note": note + " [adopted as initial baseline]",
                     "saved_at": finished,
                 }
@@ -467,6 +471,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
                 "tf": result.get("tf"),
                 "metrics": result.get("main"),
                 "wf_aggregate": wf_agg,
+                "env": env_mod.capture(),
             }
             tearsheet_mod.render_to_file(
                 iter_data_for_ts, eq_df, tr_df, history_so_far,
@@ -489,6 +494,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "wf_aggregate": wf_agg,
         "dsr": dsr_value,
         "audit": audit_summary,
+        "env": env_mod.capture(),
         "note": note,
         "error": error,
     }

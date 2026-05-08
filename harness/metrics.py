@@ -5,27 +5,76 @@ import numpy as np
 import pandas as pd
 
 
-def _annualization_factor(index: pd.DatetimeIndex) -> float:
-    """Estimate periods-per-year from the index spacing."""
+# Crypto: 24/7, no holidays. periods_per_year = 365.25 * bars_per_day.
+# Source-of-truth lookup; harness tools should ALWAYS pass tf when known so
+# the factor doesn't depend on whether the data has gaps or partial coverage.
+TF_PERIODS_PER_YEAR: dict[str, float] = {
+    "1min":  365.25 * 24 * 60,    # 525_960
+    "5min":  365.25 * 24 * 12,    # 105_192
+    "15min": 365.25 * 24 * 4,     # 35_064
+    "30min": 365.25 * 24 * 2,     # 17_532
+    "1h":    365.25 * 24,         # 8_766
+    "2h":    365.25 * 12,         # 4_383
+    "4h":    365.25 * 6,          # 2_191.5
+    "6h":    365.25 * 4,          # 1_461
+    "8h":    365.25 * 3,          # 1_095.75
+    "12h":   365.25 * 2,          # 730.5
+    "1d":    365.25,              # 365.25
+    "1w":    52.1429,
+}
+
+
+def _resolve_periods_per_year(index: pd.DatetimeIndex, tf: str | None) -> float:
+    """Periods-per-year for annualizing Sharpe/Sortino.
+
+    If ``tf`` is provided and known, return the canonical factor —
+    independent of how many bars the sample actually contains. Sample
+    size still affects the std-error of the estimator, but the *unit
+    of measurement* is the natural year-rate of the bar.
+
+    If ``tf`` is None or unknown, fall back to inferring from the index
+    spacing (legacy behaviour). The fallback under-estimates the factor
+    when data has gaps, which deflates the annualized Sharpe; it's
+    correct when bars are perfectly contiguous.
+    """
+    if tf and tf in TF_PERIODS_PER_YEAR:
+        return TF_PERIODS_PER_YEAR[tf]
+    # accept '60min' / '1H' / '1Min' aliases via pandas
+    if tf:
+        try:
+            secs = pd.Timedelta(tf).total_seconds()
+            if secs > 0:
+                return (365.25 * 24 * 3600) / secs
+        except Exception:
+            pass
     if len(index) < 2:
         return 1.0
     dt_seconds = (index[-1] - index[0]).total_seconds() / max(len(index) - 1, 1)
+    if dt_seconds <= 0:
+        return 1.0
     return (365.25 * 24 * 3600) / dt_seconds
 
 
-def sharpe(returns: pd.Series) -> float:
+# kept for backward-compat — call sites that haven't been threaded yet still work
+def _annualization_factor(index: pd.DatetimeIndex, tf: str | None = None) -> float:
+    return _resolve_periods_per_year(index, tf)
+
+
+def sharpe(returns: pd.Series, tf: str | None = None) -> float:
     r = returns.dropna()
     if len(r) < 2 or r.std(ddof=0) == 0:
         return 0.0
-    return float(r.mean() / r.std(ddof=0) * np.sqrt(_annualization_factor(r.index)))
+    return float(r.mean() / r.std(ddof=0)
+                 * np.sqrt(_resolve_periods_per_year(r.index, tf)))
 
 
-def sortino(returns: pd.Series) -> float:
+def sortino(returns: pd.Series, tf: str | None = None) -> float:
     r = returns.dropna()
     downside = r[r < 0]
     if len(r) < 2 or downside.std(ddof=0) == 0 or len(downside) == 0:
         return 0.0
-    return float(r.mean() / downside.std(ddof=0) * np.sqrt(_annualization_factor(r.index)))
+    return float(r.mean() / downside.std(ddof=0)
+                 * np.sqrt(_resolve_periods_per_year(r.index, tf)))
 
 
 def max_drawdown(equity: pd.Series) -> float:
@@ -70,18 +119,19 @@ def hit_rate(returns: pd.Series) -> float:
 
 
 def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
-            n_trades: int) -> dict:
+            n_trades: int, tf: str | None = None) -> dict:
     # PSR is computed inline; DSR (which needs n_trials) is added by the caller.
     from harness.stats import psr as _psr, bootstrap_sharpe_ci as _ci
-    sh = sharpe(returns)
-    psr_value = _psr(returns) if len(returns.dropna()) >= 30 else 0.0
+    sh = sharpe(returns, tf=tf)
+    psr_value = _psr(returns, tf=tf) if len(returns.dropna()) >= 30 else 0.0
     try:
-        ci_lo, ci_hi = _ci(returns, n_boot=400) if len(returns.dropna()) >= 100 else (sh, sh)
+        ci_lo, ci_hi = (_ci(returns, n_boot=400, tf=tf)
+                        if len(returns.dropna()) >= 100 else (sh, sh))
     except Exception:
         ci_lo, ci_hi = sh, sh
     return {
         "sharpe": sh,
-        "sortino": sortino(returns),
+        "sortino": sortino(returns, tf=tf),
         "calmar": calmar(equity),
         "cagr": cagr(equity),
         "max_dd": max_drawdown(equity),

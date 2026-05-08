@@ -210,9 +210,13 @@ def build(iter_data: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame | No
     # ----- Rolling 30d Sharpe (concatenated returns) -----
     rets = eq_concat.pct_change().dropna()
     if len(rets) > 200:
-        # 30 days * 24 hourly bars = 720 (assuming 1h)
-        roll_window = 720
-        ann = math.sqrt(365.25 * 24)
+        # Use the same canonical TF lookup as the headline metrics so the
+        # rolling Sharpe is on the same scale.
+        from harness.metrics import TF_PERIODS_PER_YEAR
+        ppy = TF_PERIODS_PER_YEAR.get(tf, 365.25 * 24)  # fallback 1h
+        bars_per_day = ppy / 365.25
+        roll_window = max(50, int(round(30 * bars_per_day)))
+        ann = math.sqrt(ppy)
         rolling = rets.rolling(roll_window).mean() / rets.rolling(roll_window).std() * ann
         rolling = rolling.dropna()
         rolling_div = _plotly_div("rolling", [{

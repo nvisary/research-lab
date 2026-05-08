@@ -145,7 +145,7 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         rets = adj_returns_full[mask]
         positions = target[mask]
         n_trades = int(((entry_times >= lo) & (entry_times < hi)).sum()) if len(entry_times) else 0
-        out[label] = M.summary(equity, rets, positions, n_trades=n_trades)
+        out[label] = M.summary(equity, rets, positions, n_trades=n_trades, tf=tf)
 
     if return_curves:
         bench = (prices / prices.iloc[0]).mean(axis=1) * float(adj_equity_full.iloc[0])

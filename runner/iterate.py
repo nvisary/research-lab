@@ -383,6 +383,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
                 oos_returns_concat,
                 n_trials=iter_id,
                 trial_sharpes=trial_sharpes if len(trial_sharpes) >= 2 else None,
+                tf=cfg.tf,
             )
     except Exception:
         dsr_value = 0.0

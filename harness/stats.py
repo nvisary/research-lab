@@ -21,31 +21,27 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sps
 
-
-def _annualization_factor(idx: pd.DatetimeIndex) -> float:
-    if len(idx) < 2:
-        return 1.0
-    dt_seconds = (idx[-1] - idx[0]).total_seconds() / max(len(idx) - 1, 1)
-    return (365.25 * 24 * 3600) / dt_seconds
+from harness.metrics import _resolve_periods_per_year
 
 
-def _per_period_sharpe(returns: pd.Series) -> tuple[float, float, int]:
+def _per_period_sharpe(returns: pd.Series, tf: str | None) -> tuple[float, float, int]:
     """Return (per-period Sharpe, annualization sqrt-factor, n)."""
     r = returns.dropna()
     if len(r) < 3 or r.std(ddof=0) == 0:
         return 0.0, 1.0, len(r)
     sr_pp = float(r.mean() / r.std(ddof=0))
-    ann = math.sqrt(_annualization_factor(r.index))
+    ann = math.sqrt(_resolve_periods_per_year(r.index, tf))
     return sr_pp, ann, len(r)
 
 
-def psr(returns: pd.Series, sr_benchmark_annual: float = 0.0) -> float:
+def psr(returns: pd.Series, sr_benchmark_annual: float = 0.0,
+        tf: str | None = None) -> float:
     """Probabilistic Sharpe Ratio in [0, 1].
 
     Bailey & López de Prado (2012). Probability that the true (population) Sharpe
     exceeds `sr_benchmark_annual`, given the observed sample.
     """
-    sr_pp, ann, n = _per_period_sharpe(returns)
+    sr_pp, ann, n = _per_period_sharpe(returns, tf)
     if n < 3 or ann == 0:
         return 0.0
 
@@ -64,7 +60,8 @@ def psr(returns: pd.Series, sr_benchmark_annual: float = 0.0) -> float:
 
 
 def deflated_sharpe(returns: pd.Series, n_trials: int,
-                    trial_sharpes: list[float] | None = None) -> float:
+                    trial_sharpes: list[float] | None = None,
+                    tf: str | None = None) -> float:
     """Deflated Sharpe Ratio in [0, 1].
 
     Uses the expected maximum of `n_trials` independent draws under H0:zero edge
@@ -72,7 +69,7 @@ def deflated_sharpe(returns: pd.Series, n_trials: int,
     distribution of trial Sharpes is available, use its std for a tighter bound.
     Bailey & López de Prado (2014).
     """
-    sr_pp, ann, n = _per_period_sharpe(returns)
+    sr_pp, ann, n = _per_period_sharpe(returns, tf)
     if n < 3 or n_trials < 1 or ann == 0:
         return 0.0
 
@@ -94,13 +91,14 @@ def deflated_sharpe(returns: pd.Series, n_trials: int,
 
     sr_bench_pp = em * sigma_trials_pp
     sr_bench_annual = sr_bench_pp * ann
-    return psr(returns, sr_benchmark_annual=sr_bench_annual)
+    return psr(returns, sr_benchmark_annual=sr_bench_annual, tf=tf)
 
 
 def bootstrap_sharpe_ci(returns: pd.Series, n_boot: int = 1000,
                         confidence: float = 0.95,
                         block_size: int | None = None,
-                        seed: int | None = 42) -> tuple[float, float]:
+                        seed: int | None = 42,
+                        tf: str | None = None) -> tuple[float, float]:
     """Stationary block bootstrap CI on annualized Sharpe (Politis & Romano).
 
     Block size defaults to floor(n^(1/3)). With ~5000 hourly returns that's ~17
@@ -112,7 +110,7 @@ def bootstrap_sharpe_ci(returns: pd.Series, n_boot: int = 1000,
         return (0.0, 0.0)
     if block_size is None:
         block_size = max(2, int(round(n ** (1 / 3))))
-    ann = math.sqrt(_annualization_factor(returns.dropna().index))
+    ann = math.sqrt(_resolve_periods_per_year(returns.dropna().index, tf))
     rng = np.random.default_rng(seed)
 
     out = np.empty(n_boot)

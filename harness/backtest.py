@@ -28,6 +28,14 @@ from harness.funding import adjust_equity, funding_cashflows
 from harness.splits import Split, train_oos, walk_forward
 
 
+# Approx 24h of bars per TF. Beyond this we treat the gap as data death
+# (delisting, exchange outage, our download failed) and force position to 0.
+STALE_BARS_BY_TF: dict[str, int] = {
+    "1min": 1440, "5min": 288, "15min": 96, "30min": 48,
+    "1h": 24, "2h": 12, "4h": 6, "6h": 4, "8h": 3, "12h": 2, "1d": 1,
+}
+
+
 # --------------------------------------------------------------------------- #
 # Strategy loading
 # --------------------------------------------------------------------------- #
@@ -105,12 +113,26 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     if not data:
         return {"train": {}, "oos": {}, "error": "no data"}
 
-    prices = pd.concat({s: df["close"] for s, df in data.items()}, axis=1).ffill()
-    prices = prices.dropna(how="all")
-    symbols_present = list(prices.columns)
+    raw_prices = pd.concat({s: df["close"] for s, df in data.items()}, axis=1)
+    raw_prices = raw_prices.dropna(how="all")
+    symbols_present = list(raw_prices.columns)
+
+    # Bounded forward-fill: tolerate gaps up to ~24h, but treat anything
+    # longer as a delisting / data outage. Past that horizon we force the
+    # target position to 0 (clean exit at last known price). Without this
+    # cap, an unbounded ffill keeps the position open at a stale price
+    # forever, hiding the realistic force-close loss of a real delisting.
+    stale_limit = STALE_BARS_BY_TF.get(tf, 24)
+    bounded = raw_prices.ffill(limit=stale_limit)
+    stale_mask = bounded.isna()                     # True after gap exceeds limit
+    prices = raw_prices.ffill()                     # for vbt bookkeeping
+    n_stale = int(stale_mask.sum().sum())
 
     signals = strategy_mod.generate_signals(data, params)
     target = _positions_to_wide(signals, symbols_present, prices.index)
+    # Force flat on stale bars: closes any open position at the last known
+    # price and prevents re-entry while data is still missing.
+    target = target.where(~stale_mask.reindex_like(target).fillna(False), 0.0)
 
     pf = _run_vectorbt(prices, target, costs=costs)
 

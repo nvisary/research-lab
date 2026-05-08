@@ -7,7 +7,7 @@ The harness:
   4. Computes the standard metric panel.
 
 Usage:
-    python -m harness.backtest strategies/ema_pilot --period 2025
+    python -m harness.backtest strategies/ema_pilot --start 2024-01-01 --end 2025-10-01
 """
 from __future__ import annotations
 
@@ -283,19 +283,34 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("strategy_dir", help="Path to strategies/<name>/")
-    ap.add_argument("--period", default="2025", help="Year (e.g. 2025) or YYYY-MM-DD:YYYY-MM-DD")
-    ap.add_argument("--tf", default="1h")
+    ap.add_argument("--start", default="2024-01-01",
+                    help="Period start (YYYY-MM-DD). Same default as runner.iterate.")
+    ap.add_argument("--end", default="2025-10-01",
+                    help="Period end (YYYY-MM-DD, exclusive).")
+    ap.add_argument("--period", default=None,
+                    help="DEPRECATED. Backwards-compat alias for --start:--end "
+                         "(format YYYY-MM-DD:YYYY-MM-DD or just YYYY).")
+    ap.add_argument("--tf", default=None,
+                    help="If omitted, read strategy.py:DEFAULT_TF, fall back to '1h'.")
     ap.add_argument("--symbols", nargs="*")
     ap.add_argument("--walk", type=int, default=0)
     args = ap.parse_args()
 
-    if ":" in args.period:
-        ps, pe = args.period.split(":")
+    if args.period:
+        if ":" in args.period:
+            ps, pe = args.period.split(":")
+        else:
+            y = int(args.period)
+            ps, pe = f"{y}-01-01", f"{y + 1}-01-01"
     else:
-        y = int(args.period)
-        ps, pe = f"{y}-01-01", f"{y + 1}-01-01"
+        ps, pe = args.start, args.end
 
-    res = run(args.strategy_dir, ps, pe, symbols=args.symbols, tf=args.tf,
+    tf = args.tf
+    if tf is None:
+        mod = load_strategy(Path(args.strategy_dir))
+        tf = getattr(mod, "DEFAULT_TF", "1h")
+
+    res = run(args.strategy_dir, ps, pe, symbols=args.symbols, tf=tf,
               walk_windows=args.walk)
     print(json.dumps(res, indent=2, default=str))
 

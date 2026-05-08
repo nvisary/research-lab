@@ -31,6 +31,12 @@ export type HistoryRow = {
   metrics_train: Metrics;
   wf_aggregate: WfAggregate;
   dsr: number | null;
+  audit?: {
+    audit?: string;
+    error_type?: string;
+    mode?: string;
+    message?: string;
+  } | null;
   note: string;
   finished: string;
   error: string | null;

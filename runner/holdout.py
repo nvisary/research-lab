@@ -24,15 +24,18 @@ from pathlib import Path
 import pandas as pd
 
 from harness import backtest as bt
+from harness import lookahead as la
 from harness import metrics as M
 from harness.splits import Split
+from datafeed.loader import load_many
 
 
 DEFAULT_HOLDOUT_START = "2025-10-01"
 DEFAULT_HOLDOUT_END = "2026-05-01"   # 7-month holdout: 2025-Q4 + 2026-Q1+Apr
 
 
-def run_holdout(strategy_dir: Path, start: str, end: str, tf: str = "1h") -> dict:
+def run_holdout(strategy_dir: Path, start: str, end: str, tf: str = "1h",
+                audit: bool = True) -> dict:
     strategy_dir = Path(strategy_dir).resolve()
     runs = strategy_dir / "runs"
     runs.mkdir(exist_ok=True)
@@ -46,6 +49,42 @@ def run_holdout(strategy_dir: Path, start: str, end: str, tf: str = "1h") -> dic
     mod = bt.load_strategy(strategy_dir)
     params = dict(getattr(mod, "DEFAULT_PARAMS", {}))
     symbols = getattr(mod, "DEFAULT_SYMBOLS", ["BTCUSDT"])
+
+    # Lookahead audit pre-flight (cheap on its own; runs even when iterate
+    # already audited because the human may have edited strategy.py since).
+    audit_summary: dict | None = None
+    if audit:
+        audit_symbols = symbols[:2]
+        audit_data = load_many(audit_symbols,
+                               pd.Timestamp(start, tz="UTC"),
+                               pd.Timestamp(start, tz="UTC") + pd.Timedelta(days=120),
+                               tf=tf)
+        audit_data = {s: df for s, df in audit_data.items() if not df.empty}
+        if audit_data:
+            try:
+                report = la.audit(mod, audit_data, params, k=12)
+                audit_summary = {"audit": "passed", "k": report.k_perturbations,
+                                 "duration_seconds": report.duration_seconds}
+            except (la.LookaheadError, la.DeterminismError) as e:
+                msg = str(e)
+                bad = {
+                    "iter": iter_id,
+                    "ran_at": datetime.now(timezone.utc).isoformat(),
+                    "period": [start, end],
+                    "tf": tf,
+                    "symbols": symbols,
+                    "params": params,
+                    "metrics": {},
+                    "composite": None,
+                    "best_composite_train_val": (best or {}).get("composite"),
+                    "audit": {"audit": "FAILED", "error_type": type(e).__name__,
+                              "mode": getattr(e, "mode", None), "message": msg},
+                    "error": msg,
+                }
+                (holdout_dir / f"holdout_iter_{iter_id:04d}.json").write_text(
+                    json.dumps(bad, indent=2, default=str), encoding="utf-8"
+                )
+                return bad
 
     # Holdout is a single window. Use a degenerate Split (no train) to reuse run_split.
     s = pd.Timestamp(start, tz="UTC")
@@ -67,6 +106,7 @@ def run_holdout(strategy_dir: Path, start: str, end: str, tf: str = "1h") -> dic
         "metrics": metrics,
         "composite": composite,
         "best_composite_train_val": (best or {}).get("composite"),
+        "audit": audit_summary,
     }
 
     (holdout_dir / f"holdout_iter_{iter_id:04d}.json").write_text(
@@ -91,8 +131,15 @@ def main() -> None:
     ap.add_argument("--start", default=DEFAULT_HOLDOUT_START)
     ap.add_argument("--end", default=DEFAULT_HOLDOUT_END)
     ap.add_argument("--tf", default="1h")
+    ap.add_argument("--no-audit", action="store_true",
+                    help="Skip lookahead audit (only for trusted strategies).")
     args = ap.parse_args()
-    rep = run_holdout(Path(args.strategy_dir), args.start, args.end, tf=args.tf)
+    rep = run_holdout(Path(args.strategy_dir), args.start, args.end, tf=args.tf,
+                      audit=not args.no_audit)
+    if rep.get("error"):
+        print(json.dumps({"audit_failed": rep["audit"], "error": rep["error"]},
+                         indent=2, default=str))
+        return
     print(json.dumps({
         "iter": rep["iter"],
         "period": rep["period"],

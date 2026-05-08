@@ -116,7 +116,7 @@ The harness handles fees, slippage, sizing, splits, metrics. You decide *what* t
 
 ## 5. Hard rules — violations are cheating
 
-1. **No lookahead.** Always `.shift(1)` before emitting positions. The position at index `t` may depend only on data with timestamp `≤ t-1`.
+1. **No lookahead.** Always `.shift(1)` before emitting positions. The position at index `t` may depend only on data with timestamp `≤ t-1`. **The harness audits this** on every code change via determinism + tail-poison + per-bar perturbation tests (see §10c). A strategy that fails the audit produces verdict `LOOKAHEAD_BUG`, is automatically reverted, and never reaches the backtest. You cannot bypass this — it's how the framework keeps you honest.
 2. **No future data.** Don't load anything outside the `data` dict.
 3. **No calendar overfit.** No "skip March 2024" / "go flat on FOMC dates" / specific timestamps.
 4. **No external state** in `generate_signals` — files, env vars, network, RNG with fixed seeds tied to dates.
@@ -234,6 +234,35 @@ Every accepted (KEEP / BASELINE) iteration writes:
 Open the tear sheet from the dashboard's Best card or History row.
 For programmatic access: `runs/trades/iter_NNNN.parquet` is plain
 parquet, load it with pandas / polars / DuckDB.
+
+## 10c. Lookahead audit — what runs and when
+
+Before each iteration runs the backtest, the harness audits your strategy
+for lookahead bias. Three layered checks:
+
+1. **Determinism.** Two runs on identical inputs must produce identical signals.
+   If you use randomness, fix a seed inside `generate_signals`.
+2. **Tail-poison test.** Replace OHLCV at the last 30% of the window with NaN.
+   Signals at the unaffected 70% must be bit-for-bit identical. Catches
+   `df.shift(-N)`, `rolling(N, center=True)`, and similar future-leakage bugs.
+3. **Per-bar perturbation.** For 12 randomly chosen bars, scale OHLCV at that
+   single bar by ±5%. Signals at and before that bar must remain identical
+   (they should depend only on prior bars). Catches the most common bug:
+   using `close[t]` to compute `pos[t]` without `.shift(1)`.
+
+**Outcome on failure.** Verdict = `LOOKAHEAD_BUG`. The strategy file is
+reverted to the prior best. The error (with the offending bar, symbol, and
+the diverging signal values) is recorded in `history.jsonl`. The backtest
+does not run — there's no number to optimize against on cheating code.
+
+**When it runs.** By default `--audit once`: only when `strategy.py`'s sha256
+changed since the last passing audit. After a clean baseline this means
+audit cost is amortized to zero across iterations that change parameters
+only. Override with `--audit always` for paranoid mode or `--audit never`
+for tight loops on already-trusted code.
+
+**Manual run.** `uv run python -m runner.audit strategies/<name>` prints
+a JSON report and exits with code 2 on lookahead, 3 on non-determinism.
 
 ## 11. Where the data is
 

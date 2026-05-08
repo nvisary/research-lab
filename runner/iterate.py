@@ -27,10 +27,14 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
+
 from harness import backtest as bt
+from harness import lookahead as la
 from harness import tearsheet as tearsheet_mod
 from harness.metrics import aggregate_wf_composite, composite_score
 from harness.stats import deflated_sharpe
+from datafeed.loader import load_many
 
 
 # --------------------------------------------------------------------------- #
@@ -48,6 +52,13 @@ class IterationConfig:
     min_trades: int = 50
     low_trades_penalty: float = 0.5
     epsilon: float = 0.01            # composite must beat best by this to keep
+    # Lookahead audit:
+    #   "once"   — run when strategy.py's sha256 changed since last passing audit
+    #   "always" — run every iteration (slower, exhaustive)
+    #   "never"  — skip (only for tight optimization on already-trusted strategies)
+    audit_mode: str = "once"
+    audit_k: int = 12
+    audit_sample_bars: int = 1500
 
 
 # --------------------------------------------------------------------------- #
@@ -82,6 +93,88 @@ def _next_iter_id(runs: Path) -> int:
         return sum(1 for _ in f) + 1
 
 
+def _run_audit(runs: Path, strategy_dir: Path, cfg: IterationConfig) -> tuple[bool, str | None, dict | None]:
+    """Lookahead audit pre-flight.
+
+    Returns (should_skip_backtest, error_message_or_none, audit_summary_or_none).
+    On a clean pass, writes runs/last_audit.json with the strategy's sha256.
+    On any failure (lookahead or determinism) returns an error message and a
+    structured summary; the caller should record verdict=LOOKAHEAD_BUG and
+    revert the strategy file.
+    """
+    strategy_file = strategy_dir / "strategy.py"
+    cur_hash = la.file_sha256(strategy_file)
+    audit_log = runs / "last_audit.json"
+
+    # "once": skip when prior pass exists for the same hash.
+    if cfg.audit_mode == "never":
+        return False, None, None
+    if cfg.audit_mode == "once" and audit_log.exists():
+        try:
+            prev = json.loads(audit_log.read_text(encoding="utf-8"))
+            if prev.get("sha256") == cur_hash and prev.get("passed") is True:
+                return False, None, {"audit": "skipped (sha256 unchanged)",
+                                     "sha256": cur_hash}
+        except Exception:
+            pass
+
+    # Load a small audit window — independent of full iter dataset for speed.
+    mod = bt.load_strategy(strategy_dir)
+    symbols = (getattr(mod, "DEFAULT_SYMBOLS", None) or ["BTCUSDT"])[:2]
+    audit_start = pd.Timestamp(cfg.period_start, tz="UTC")
+    audit_end = audit_start + pd.Timedelta(days=120)  # 4 months × 1h ≈ 2900 bars
+    audit_data = load_many(symbols, audit_start, audit_end, tf=cfg.tf)
+    audit_data = {s: df for s, df in audit_data.items() if not df.empty}
+    if not audit_data:
+        return False, None, {"audit": "skipped (no data in audit window)",
+                             "sha256": cur_hash}
+
+    try:
+        report = la.audit(
+            mod, audit_data, dict(getattr(mod, "DEFAULT_PARAMS", {})),
+            k=cfg.audit_k, sample_bars=cfg.audit_sample_bars,
+        )
+    except (la.LookaheadError, la.DeterminismError) as e:
+        offending = getattr(e, "offending", None)
+        summary = {
+            "audit": "FAILED",
+            "sha256": cur_hash,
+            "error_type": type(e).__name__,
+            "mode": getattr(e, "mode", None),
+            "message": str(e),
+            "offending_first_5": [
+                {"timestamp": str(t), "symbol": s, "orig": o, "perturbed": p}
+                for (t, s, o, p) in (offending or [])[:5]
+            ],
+        }
+        # Persist the failed audit so future "once"-mode runs do not silently
+        # skip a known-bad strategy until it gets a code change.
+        audit_log.write_text(json.dumps({
+            "sha256": cur_hash,
+            "passed": False,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            **summary,
+        }, indent=2), encoding="utf-8")
+        return True, str(e), summary
+
+    audit_log.write_text(json.dumps({
+        "sha256": cur_hash,
+        "passed": True,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "k": report.k_perturbations,
+        "n_symbols": report.n_symbols_tested,
+        "n_bars": report.n_bars_tested,
+        "duration_seconds": report.duration_seconds,
+        "notes": report.notes,
+    }, indent=2), encoding="utf-8")
+    return False, None, {
+        "audit": "passed",
+        "sha256": cur_hash,
+        "k_perturbations": report.k_perturbations,
+        "duration_seconds": report.duration_seconds,
+    }
+
+
 # --------------------------------------------------------------------------- #
 def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
     strategy_dir = Path(strategy_dir).resolve()
@@ -95,6 +188,51 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
     shutil.copy2(strategy_file, snapshot)
 
     started = datetime.now(timezone.utc).isoformat()
+
+    # ---- Lookahead audit pre-flight ----
+    audit_block, audit_err, audit_summary = _run_audit(runs, strategy_dir, cfg)
+    if audit_block:
+        # Strategy is broken — revert to best (if any) and record without backtesting.
+        finished = datetime.now(timezone.utc).isoformat()
+        best_now = _load_best(runs)
+        best_file = runs / "best_strategy.py"
+        if best_file.exists() and best_now is not None:
+            shutil.copy2(best_file, strategy_file)
+            verdict = "LOOKAHEAD_BUG"
+        else:
+            # No baseline yet; leave the file in place so the agent can fix it.
+            verdict = "LOOKAHEAD_BUG_NO_BASELINE"
+        row = {
+            "iter": iter_id,
+            "started": started,
+            "finished": finished,
+            "verdict": verdict,
+            "composite": None,
+            "best_before": (best_now or {}).get("composite"),
+            "params": None,
+            "metrics_oos": {},
+            "metrics_train": {},
+            "walk_forward": None,
+            "wf_aggregate": None,
+            "dsr": 0.0,
+            "audit": audit_summary,
+            "note": note,
+            "error": audit_err,
+        }
+        _append_history(runs, row)
+        return {
+            "iter": iter_id,
+            "verdict": verdict,
+            "composite": None,
+            "best_before": (best_now or {}).get("composite"),
+            "oos_sharpe": 0.0,
+            "oos_max_dd": 0.0,
+            "oos_n_trades": 0,
+            "dsr": 0.0,
+            "error": audit_err,
+            "audit": audit_summary,
+        }
+
     error = None
     try:
         result = bt.run(strategy_dir, cfg.period_start, cfg.period_end,
@@ -337,6 +475,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "walk_forward": result.get("walk_forward"),
         "wf_aggregate": wf_agg,
         "dsr": dsr_value,
+        "audit": audit_summary,
         "note": note,
         "error": error,
     }
@@ -365,6 +504,11 @@ def main() -> None:
     ap.add_argument("--tf", default="1h")
     ap.add_argument("--walk", type=int, default=4,
                     help="Number of walk-forward windows (1 == single train/OOS split).")
+    ap.add_argument("--audit", choices=["once", "always", "never"], default="once",
+                    help="Lookahead audit: once (default, when strategy.py changed), "
+                         "always (every iter), never (skip — only for trusted strategies).")
+    ap.add_argument("--audit-k", type=int, default=12,
+                    help="Number of per-bar perturbations in the audit.")
     ap.add_argument("--dd-penalty", type=float, default=0.5)
     ap.add_argument("--min-trades", type=int, default=50)
     ap.add_argument("--epsilon", type=float, default=0.01)
@@ -379,6 +523,8 @@ def main() -> None:
         dd_penalty=args.dd_penalty,
         min_trades=args.min_trades,
         epsilon=args.epsilon,
+        audit_mode=args.audit,
+        audit_k=args.audit_k,
     )
     out = run_one(Path(args.strategy_dir), cfg, note=args.note)
     print(json.dumps(out, indent=2))

@@ -16,5 +16,6 @@ export const verdictClass = (v: string): string => {
   if (k === "keep" || k === "baseline") return "bg-emerald-500/10 text-emerald-400";
   if (k === "revert") return "bg-rose-500/10 text-rose-400";
   if (k === "error") return "bg-amber-500/10 text-amber-400";
+  if (k.startsWith("lookahead_bug")) return "bg-amber-600/20 text-amber-300 font-semibold";
   return "bg-slate-500/10 text-slate-400";
 };

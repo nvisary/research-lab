@@ -419,7 +419,10 @@ export function StrategyDetail() {
                   <tr key={h.iter} className="border-t border-edge">
                     <td className="px-3 py-1.5">{h.iter}</td>
                     <td className="px-3 py-1.5">
-                      <span className={`px-2 py-0.5 rounded text-xs ${verdictClass(h.verdict)}`}>
+                      <span
+                        className={`px-2 py-0.5 rounded text-xs ${verdictClass(h.verdict)}`}
+                        title={h.audit?.message || h.error || undefined}
+                      >
                         {h.verdict}
                       </span>
                     </td>

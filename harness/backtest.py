@@ -59,16 +59,31 @@ def load_strategy(strategy_dir: Path):
 # Signal → portfolio
 # --------------------------------------------------------------------------- #
 def _build_standardized_trades(pf, train_end: pd.Timestamp) -> pd.DataFrame:
-    """Pull pf.trades.records_readable, rename to project conventions,
+    """Pull pf.positions.records_readable, rename to project conventions,
     add `slice` (train/oos) tag based on entry time vs train_end.
+
+    We use ``pf.positions`` (round-trip-level: one row per
+    entry → fully-closed cycle) rather than ``pf.trades``
+    (partial-fill-level: every size change books a separate row).
+    With size-varying strategies (volatility-targeted, dynamic
+    rebalance), pf.trades produces N×k records where k is the number
+    of partial fills inside one logical round-trip — which inflates
+    n_trades, distorts the low-trades-penalty in composite_score, and
+    makes the trade ledger unreadable. pf.positions gives us one row
+    per logical trade with summed PnL and weighted-average prices.
 
     Returns an empty DataFrame on any error or empty trade set —
     callers must handle.
     """
     try:
-        tr = pf.trades.records_readable.copy()
+        tr = pf.positions.records_readable.copy()
     except Exception:
-        return pd.DataFrame()
+        # Fallback for older vectorbt: positions is missing, fall back
+        # to trades and accept the partial-fill inflation.
+        try:
+            tr = pf.trades.records_readable.copy()
+        except Exception:
+            return pd.DataFrame()
     if tr.empty:
         return pd.DataFrame()
     rename = {
@@ -234,7 +249,9 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     pf = _run_vectorbt(prices, target, costs=costs, volumes=raw_volumes)
 
     try:
-        trade_records = pf.trades.records_readable
+        # See _build_standardized_trades: pf.positions gives one row per
+        # round-trip; pf.trades inflates by the number of partial fills.
+        trade_records = pf.positions.records_readable
         entry_times = pd.to_datetime(trade_records["Entry Timestamp"], utc=True)
     except Exception:
         entry_times = pd.Series(dtype="datetime64[ns, UTC]")

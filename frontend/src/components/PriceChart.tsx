@@ -86,9 +86,23 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
     },
   ];
 
-  // Trade markers: entry triangle-up, exit triangle-down. Color by sign
-  // of return_pct. Connecting line between entry and exit, faint.
+  // Trade markers: entry triangle-up, exit triangle-down, placed on the
+  // PRICE LINE (close at entry/exit bar) — NOT at vectorbt's
+  // "Avg Entry Price" which is a weighted average of all partial fills
+  // throughout the position life and drifts far from the actual price
+  // at entry_time when the position is held while price moves.
+  //
+  // The trade's holding period is highlighted by colouring the segment
+  // of the real price line green (winning) or red (losing) — replaces
+  // the previous diagonal entry-to-exit connector which visually
+  // suggested a fake monotonic equity path.
   if (symTrades.length > 0) {
+    // Lookup: timestamp -> bar index (for slicing the OHLCV close array).
+    const idxByTime = new Map<string, number>();
+    for (let i = 0; i < ohlcv.timestamp.length; i++) {
+      idxByTime.set(ohlcv.timestamp[i], i);
+    }
+
     const entryX: string[] = [];
     const entryY: number[] = [];
     const entryColors: string[] = [];
@@ -99,61 +113,66 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
     const exitColors: string[] = [];
     const exitHovers: string[] = [];
 
-    // One connecting segment per trade — emit as a single trace with
-    // None breaks so Plotly draws disjoint line segments.
-    const segX: (string | null)[] = [];
-    const segY: (number | null)[] = [];
-
-    for (const t of symTrades) {
-      const winning = t.pnl_quote > 0;
-      // Long-entry green, short-entry purple. Exit color matches PnL sign:
-      // green if profitable, red if not.
-      const isLong = String(t.direction).toLowerCase().startsWith("long");
-      const entryColor = isLong ? "#10b981" : "#a855f7";
-      const exitColor = winning ? "#10b981" : "#ef4444";
-      const segColor = winning ? "#10b98155" : "#ef444455";
-
-      const pnlStr = `pnl ${(t.return_pct * 100).toFixed(2)}% ($${t.pnl_quote.toFixed(2)})`;
-      const durStr = `${t.duration_hours.toFixed(1)}h`;
-      const baseHover =
-        `${t.direction} ${activeSymbol}<br>` +
-        `entry ${t.entry_time}<br>@ ${t.entry_price.toFixed(2)}<br>` +
-        `exit ${t.exit_time}<br>@ ${t.exit_price.toFixed(2)}<br>` +
-        `${pnlStr} • ${durStr}<extra></extra>`;
-
-      entryX.push(t.entry_time);
-      entryY.push(t.entry_price);
-      entryColors.push(entryColor);
-      entryHovers.push(baseHover);
-
-      exitX.push(t.exit_time);
-      exitY.push(t.exit_price);
-      exitColors.push(exitColor);
-      exitHovers.push(baseHover);
-
-      segX.push(t.entry_time, t.exit_time, null);
-      segY.push(t.entry_price, t.exit_price, null);
-      // Note: per-segment colour is not directly supported in a single
-      // line trace; we render one global semi-transparent green line for
-      // wins and one red for losses below.
-    }
-
-    // Two separate line traces for win/loss colouring of segments.
+    // Holding-period highlight: split into win/loss traces so colour
+    // can vary, with `null` separators so disjoint trades don't connect.
     const winSegX: (string | null)[] = [];
     const winSegY: (number | null)[] = [];
     const lossSegX: (string | null)[] = [];
     const lossSegY: (number | null)[] = [];
+
     for (const t of symTrades) {
-      const arrX = t.pnl_quote > 0 ? winSegX : lossSegX;
-      const arrY = t.pnl_quote > 0 ? winSegY : lossSegY;
-      arrX.push(t.entry_time, t.exit_time, null);
-      arrY.push(t.entry_price, t.exit_price, null);
+      const eIdx = idxByTime.get(t.entry_time);
+      const xIdx = idxByTime.get(t.exit_time);
+      const winning = t.pnl_quote > 0;
+      const isLong = String(t.direction).toLowerCase().startsWith("long");
+      const entryColor = isLong ? "#10b981" : "#a855f7";
+      const exitColor = winning ? "#10b981" : "#ef4444";
+
+      // Y-position of marker: real close at the bar (on the price line).
+      // Fall back to vectorbt's avg-price if the bar isn't in the OHLCV
+      // window (shouldn't happen normally).
+      const eY = eIdx !== undefined ? ohlcv.close[eIdx] : t.entry_price;
+      const xY = xIdx !== undefined ? ohlcv.close[xIdx] : t.exit_price;
+
+      const pnlStr = `pnl ${(t.return_pct * 100).toFixed(2)}% ($${t.pnl_quote.toFixed(2)})`;
+      const durStr = `${t.duration_hours.toFixed(1)}h`;
+      const hover =
+        `${t.direction} ${activeSymbol}<br>` +
+        `entry ${t.entry_time}<br>close @ ${eY.toFixed(2)} ` +
+        `(avg fill ${t.entry_price.toFixed(2)})<br>` +
+        `exit ${t.exit_time}<br>close @ ${xY.toFixed(2)} ` +
+        `(avg fill ${t.exit_price.toFixed(2)})<br>` +
+        `${pnlStr} • ${durStr}<extra></extra>`;
+
+      entryX.push(t.entry_time);
+      entryY.push(eY);
+      entryColors.push(entryColor);
+      entryHovers.push(hover);
+
+      exitX.push(t.exit_time);
+      exitY.push(xY);
+      exitColors.push(exitColor);
+      exitHovers.push(hover);
+
+      // Holding-period highlight: copy actual close prices for every bar
+      // in [eIdx, xIdx]. Only emit if both ends are in the OHLCV window.
+      if (eIdx !== undefined && xIdx !== undefined && xIdx >= eIdx) {
+        const arrX = winning ? winSegX : lossSegX;
+        const arrY = winning ? winSegY : lossSegY;
+        for (let i = eIdx; i <= xIdx; i++) {
+          arrX.push(ohlcv.timestamp[i]);
+          arrY.push(ohlcv.close[i]);
+        }
+        arrX.push(null);
+        arrY.push(null);
+      }
     }
+
     if (winSegX.length > 0) {
       traces.push({
         x: winSegX, y: winSegY,
         mode: "lines", type: "scatter", name: "winning trades",
-        line: { color: "#10b98166", width: 1 },
+        line: { color: "#10b981", width: 2.5 },
         hoverinfo: "skip",
         showlegend: true,
       });
@@ -162,7 +181,7 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
       traces.push({
         x: lossSegX, y: lossSegY,
         mode: "lines", type: "scatter", name: "losing trades",
-        line: { color: "#ef444466", width: 1 },
+        line: { color: "#ef4444", width: 2.5 },
         hoverinfo: "skip",
         showlegend: true,
       });
@@ -172,7 +191,7 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
       x: entryX, y: entryY,
       mode: "markers", type: "scatter", name: "entries",
       marker: {
-        symbol: "triangle-up", size: 10,
+        symbol: "triangle-up", size: 11,
         color: entryColors, line: { color: "#0f172a", width: 1 },
       },
       hovertemplate: entryHovers,
@@ -182,7 +201,7 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
       x: exitX, y: exitY,
       mode: "markers", type: "scatter", name: "exits",
       marker: {
-        symbol: "triangle-down", size: 10,
+        symbol: "triangle-down", size: 11,
         color: exitColors, line: { color: "#0f172a", width: 1 },
       },
       hovertemplate: exitHovers,

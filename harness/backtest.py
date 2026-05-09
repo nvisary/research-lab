@@ -453,7 +453,7 @@ def main() -> None:
     ap.add_argument("strategy_dir", help="Path to strategies/<name>/")
     ap.add_argument("--start", default="2024-01-01",
                     help="Period start (YYYY-MM-DD). Same default as runner.iterate.")
-    ap.add_argument("--end", default="2025-10-01",
+    ap.add_argument("--end", default="2026-01-01",
                     help="Period end (YYYY-MM-DD, exclusive).")
     ap.add_argument("--period", default=None,
                     help="DEPRECATED. Backwards-compat alias for --start:--end "

@@ -27,7 +27,7 @@ type IterForm = {
 
 const defaultForm: IterForm = {
   start: "2024-01-01",
-  end: "2025-10-01",
+  end: "2026-01-01",
   // Empty string => backend defers to strategy.py:DEFAULT_TF. The user can
   // override by typing a value here.
   tf: "",
@@ -35,7 +35,7 @@ const defaultForm: IterForm = {
   note: "",
 };
 
-const HOLDOUT = { start: "2025-10-01", end: "2026-05-01", tf: "" };
+const HOLDOUT = { start: "2026-01-01", end: "2026-05-01", tf: "" };
 
 export function StrategyDetail() {
   const { name = "" } = useParams();

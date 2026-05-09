@@ -330,7 +330,7 @@ def api_monthly_returns(name: str, iter_id: int):
 
 class IterateRequest(BaseModel):
     start: str = "2024-01-01"
-    end: str = "2025-10-01"
+    end: str = "2026-01-01"
     # None means defer to strategy.py:DEFAULT_TF. Hard-coded "1h" here was
     # a real bug — it silently overrode 4h/15m strategies, breaking the
     # entire run because vol_lookback / bars_per_day were calibrated for
@@ -436,7 +436,7 @@ def api_trades(name: str, iter_id: int):
 
 
 class HoldoutRequest(BaseModel):
-    start: str = "2025-10-01"
+    start: str = "2026-01-01"
     end: str = "2026-05-01"
     # tf=None means "read DEFAULT_TF from strategy.py". Hard-coded "1h" here
     # was a real bug — it silently overrode strategies that declared 4h/15m/etc.

@@ -46,7 +46,7 @@ class IterationConfig:
     #   train+val = Jan 2024 .. Sep 2025  (used for composite score & keep/revert)
     #   holdout   = Oct 2025 .. Dec 2025  (NEVER touched here — see runner.holdout)
     period_start: str = "2024-01-01"
-    period_end: str = "2025-10-01"
+    period_end: str = "2026-01-01"
     # tf=None means "read from strategy.py:DEFAULT_TF, fall back to 1h".
     # CLI --tf or programmatic override forces a specific value regardless.
     tf: str | None = None
@@ -568,7 +568,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("strategy_dir")
     ap.add_argument("--start", default="2024-01-01")
-    ap.add_argument("--end", default="2025-10-01")
+    ap.add_argument("--end", default="2026-01-01")
     ap.add_argument("--tf", default=None,
                     help="Decision timeframe. If omitted, read strategy.py:DEFAULT_TF, "
                          "fall back to '1h'.")

@@ -31,8 +31,13 @@ from harness.splits import Split
 from datafeed.loader import load_many
 
 
-DEFAULT_HOLDOUT_START = "2025-10-01"
-DEFAULT_HOLDOUT_END = "2026-05-01"   # 7-month holdout: 2025-Q4 + 2026-Q1+Apr
+DEFAULT_HOLDOUT_START = "2026-01-01"
+DEFAULT_HOLDOUT_END = "2026-05-01"   # 4-month holdout: 2026-Q1 + Apr.
+# Train+val now spans 2024 + 2025 (24 months) — covers both 2024 bull
+# rally AND 2025 cycle peak + Q4 flash crashes, so strategies see a
+# wider regime mix during fitting. Holdout is shorter as a result;
+# accept the smaller sample size on the final exam in exchange for
+# regime-diverse training.
 
 
 def run_holdout(strategy_dir: Path, start: str, end: str, tf: str | None = None,

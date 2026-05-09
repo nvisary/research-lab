@@ -35,9 +35,17 @@ Three layers, in this order:
 
 | Layer       | Period                        | Used by                | Agent sees? |
 |-------------|-------------------------------|------------------------|-------------|
-| **Train**   | 2024-01-01 → ~2025-05         | strategy fitting       | ✅          |
-| **OOS / Val** | ~2025-05 → 2025-09-30      | composite score (keep/revert) | ✅   |
-| **Holdout** | 2025-10-01 → 2026-04-30       | manual sanity only     | 🚫 (during iteration) |
+| **Train**   | 2024-01-01 → ~2025-07         | strategy fitting       | ✅          |
+| **OOS / Val** | ~2025-07 → 2025-12-31      | composite score (keep/revert) | ✅   |
+| **Holdout** | 2026-01-01 → 2026-04-30       | manual sanity only     | 🚫 (during iteration) |
+
+The split was rebalanced May 2026: train+val now covers 24 months
+(both 2024 bull rally AND 2025 cycle peak with Q4 flash crashes) so
+strategies fit on a regime-diverse sample. Holdout is 2026 only —
+shorter (4 months) but truly unseen. This responds to the lesson
+from xs_momentum's first holdout: when train+val is all-bull, a
+"winning" strategy can crash on the cycle reversal that holdout
+covers.
 
 **Walk-forward by default.** `runner.iterate` runs 4 walk-forward windows over
 the train+val period; each window has its own train/OOS split. The composite
@@ -45,7 +53,7 @@ score is `mean(window_composites) − 0.5·std(window_composites)`, so a strateg
 whose Sharpe is consistent across 4 windows beats one with the same mean Sharpe
 driven by a single lucky window. Use `--walk 1` to fall back to a single split.
 
-The `runner.iterate` command always runs over `[period_start, period_end)`, defaulting to `2024-01-01 → 2025-10-01`. The harness internally splits that range 75% / 25% into train / OOS. The composite score that decides keep/revert is computed **only on OOS**.
+The `runner.iterate` command always runs over `[period_start, period_end)`, defaulting to `2024-01-01 → 2026-01-01` (24 months). The harness internally splits that range 75% / 25% into train / OOS. The composite score that decides keep/revert is computed **only on OOS**.
 
 The **holdout** is a separate region. `runner.iterate` does **not** touch it. `runner.holdout` does, but writes only to `runs/holdout/`, never to `best.json` or `history.jsonl`. Treat holdout as a final exam — looked at once, before declaring victory.
 
@@ -238,12 +246,12 @@ uv run python -m datafeed.download_bybit_funding --all --launched-before 2024-01
     --start 2024-01 --end 2026-04 --workers 6
 
 # one-shot backtest of current strategy.py (no keep/revert, no history)
-uv run python -m harness.backtest strategies/<name> --period 2024-01-01:2025-10-01 --tf 1h
+uv run python -m harness.backtest strategies/<name> --period 2024-01-01:2026-01-01 --tf 1h
 
 # one iteration with keep/revert + history append (default period = train+val)
 uv run python -m runner.iterate strategies/<name> --note "one-sentence hypothesis"
 
-# holdout sanity check on 2025-Q4 + 2026-Q1+Apr — read-only, does not touch best.json
+# holdout sanity check on 2026-Q1 + Apr — read-only, does not touch best.json
 uv run python -m runner.holdout strategies/<name>
 
 # launch dashboard

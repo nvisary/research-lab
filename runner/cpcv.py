@@ -140,7 +140,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("strategy_dir")
     ap.add_argument("--start", default="2024-01-01")
-    ap.add_argument("--end", default="2025-10-01")
+    ap.add_argument("--end", default="2026-01-01")
     ap.add_argument("--tf", default=None,
                     help="If omitted, read strategy.py:DEFAULT_TF, fall back to '1h'.")
     ap.add_argument("--n-groups", type=int, default=10,

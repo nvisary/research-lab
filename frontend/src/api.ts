@@ -259,6 +259,7 @@ export type PortfolioReport = {
 export type OhlcvPayload = {
   symbol: string;
   tf: string;
+  tf_requested?: string;
   start: string;
   end: string;
   n_bars: number;

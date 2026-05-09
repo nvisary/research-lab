@@ -482,31 +482,60 @@ def api_holdout_report(name: str):
     return _sanitize({"report": rep, "equity": curve})
 
 
+_TF_LADDER = [
+    ("1min", 1), ("5min", 5), ("15min", 15), ("30min", 30),
+    ("1h", 60), ("2h", 120), ("4h", 240), ("8h", 480),
+    ("12h", 720), ("1D", 1440),
+]
+_MAX_BARS = 5000
+
+
+def _coarsen_tf(tf: str, start: str, end: str) -> str:
+    """Pick the smallest tf in the ladder whose bar count over [start,end)
+    is <= _MAX_BARS, never finer than the requested ``tf``. Falls back to
+    the coarsest available if even 1D exceeds the cap (it won't for any
+    realistic period). Unknown tfs pass through unchanged.
+    """
+    try:
+        period_minutes = (pd.Timestamp(end) - pd.Timestamp(start)).total_seconds() / 60.0
+    except Exception:
+        return tf
+    if period_minutes <= 0:
+        return tf
+    requested_idx = next((i for i, (name, _) in enumerate(_TF_LADDER) if name == tf), None)
+    if requested_idx is None:
+        return tf
+    for name, minutes in _TF_LADDER[requested_idx:]:
+        if period_minutes / minutes <= _MAX_BARS:
+            return name
+    return _TF_LADDER[-1][0]
+
+
 @app.get("/api/data/ohlcv")
 def api_ohlcv(symbol: str, start: str, end: str, tf: str = "1h"):
     """OHLCV bars for a symbol over [start, end), resampled to ``tf``.
 
     Used by the PriceChart component to overlay trade markers on the
     actual asset price (not equity). Volume is included so the UI can
-    optionally annotate participation. Cap response to 5000 bars to
-    keep payloads manageable; if the period × tf would exceed that,
-    the caller should request a coarser tf.
+    optionally annotate participation. Response is capped at 5000 bars;
+    if the requested period × tf would exceed that, the tf is auto-
+    coarsened to the smallest one that fits, and the actual tf used is
+    returned in the ``tf`` field of the payload (may differ from the
+    requested one).
     """
     from datafeed.loader import load
+    effective_tf = _coarsen_tf(tf, start, end)
     try:
-        df = load(symbol, start, end, tf=tf)
+        df = load(symbol, start, end, tf=effective_tf)
     except Exception as e:
         raise HTTPException(500, f"loader error: {type(e).__name__}: {e}")
     if df.empty:
-        raise HTTPException(404, f"no data for {symbol} {start}..{end} {tf}")
-    if len(df) > 5000:
-        raise HTTPException(400,
-                            f"{len(df)} bars > 5000; request a coarser tf "
-                            f"(currently {tf})")
+        raise HTTPException(404, f"no data for {symbol} {start}..{end} {effective_tf}")
 
     return _sanitize({
         "symbol": symbol,
-        "tf": tf,
+        "tf": effective_tf,
+        "tf_requested": tf,
         "start": start,
         "end": end,
         "n_bars": int(len(df)),

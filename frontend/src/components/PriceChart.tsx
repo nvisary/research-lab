@@ -24,13 +24,37 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Viewport-aware fetch: viewRange tracks the currently visible x-range.
+  // On zoom/pan (Plotly relayout), we update viewRange; a debounced effect
+  // re-fetches OHLCV for that range. Backend auto-coarsens the tf so we
+  // get full resolution when zoomed in tight, and downsampled bars on
+  // wide views. The strategy's native tf is the FINEST we ever request.
+  const [viewRange, setViewRange] = useState<{ s: string; e: string }>({
+    s: start, e: end,
+  });
+  const [debouncedRange, setDebouncedRange] =
+    useState<{ s: string; e: string }>({ s: start, e: end });
+
+  // Reset viewport when the strategy/iter window or symbol changes.
+  useEffect(() => {
+    setViewRange({ s: start, e: end });
+    setDebouncedRange({ s: start, e: end });
+  }, [start, end, activeSymbol]);
+
+  // Debounce viewRange -> debouncedRange (300ms) so rapid pan/zoom
+  // doesn't fire a request per frame.
+  useEffect(() => {
+    const h = setTimeout(() => setDebouncedRange(viewRange), 300);
+    return () => clearTimeout(h);
+  }, [viewRange]);
+
   useEffect(() => {
     if (!activeSymbol) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
     api
-      .ohlcv(activeSymbol, start, end, tf)
+      .ohlcv(activeSymbol, debouncedRange.s, debouncedRange.e, tf)
       .then((d) => {
         if (!cancelled) setOhlcv(d);
       })
@@ -43,7 +67,26 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [activeSymbol, start, end, tf]);
+  }, [activeSymbol, debouncedRange.s, debouncedRange.e, tf]);
+
+  const handleRelayout = (e: any) => {
+    // Plotly emits one of two shapes on zoom/pan:
+    //   { 'xaxis.range[0]': '2024-03-01 ...', 'xaxis.range[1]': '...' }
+    //   { 'xaxis.range': ['2024-03-01 ...', '...'] }
+    // Auto-range (double-click reset) emits { 'xaxis.autorange': true }.
+    if (e["xaxis.autorange"]) {
+      setViewRange({ s: start, e: end });
+      return;
+    }
+    const r0 = e["xaxis.range[0]"] ?? e["xaxis.range"]?.[0];
+    const r1 = e["xaxis.range[1]"] ?? e["xaxis.range"]?.[1];
+    if (r0 != null && r1 != null) {
+      // Clamp to the strategy's full window — we don't fetch beyond it.
+      const s = String(r0) < start ? start : String(r0);
+      const en = String(r1) > end ? end : String(r1);
+      setViewRange({ s, e: en });
+    }
+  };
 
   useEffect(() => {
     if (iter === null) {
@@ -70,9 +113,10 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
     [trades, activeSymbol]
   );
 
-  if (loading) return <div className="text-slate-500 italic">loading price…</div>;
   if (error) return <div className="text-rose-400">price load failed: {error}</div>;
-  if (!ohlcv) return null;
+  if (!ohlcv) {
+    return <div className="text-slate-500 italic">loading price…</div>;
+  }
 
   const traces: any[] = [
     {
@@ -97,11 +141,24 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
   // the previous diagonal entry-to-exit connector which visually
   // suggested a fake monotonic equity path.
   if (symTrades.length > 0) {
-    // Lookup: timestamp -> bar index (for slicing the OHLCV close array).
-    const idxByTime = new Map<string, number>();
-    for (let i = 0; i < ohlcv.timestamp.length; i++) {
-      idxByTime.set(ohlcv.timestamp[i], i);
-    }
+    // Snap trade timestamps to the loaded bar grid. Exact match used to
+    // be enough when the chart was always at the strategy's native tf,
+    // but the backend now auto-coarsens on wide views (e.g. 1h trades
+    // on a 4h-rendered chart) so trade timestamps no longer hit the
+    // bar grid exactly. Binary-search the largest bar index whose
+    // timestamp is <= the trade's timestamp — i.e. the bar that
+    // CONTAINS the trade event. Returns -1 if the trade is before the
+    // first loaded bar.
+    const tsArr = ohlcv.timestamp;
+    const findBar = (t: string): number => {
+      let lo = 0, hi = tsArr.length - 1, ans = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (tsArr[mid] <= t) { ans = mid; lo = mid + 1; }
+        else                 { hi = mid - 1; }
+      }
+      return ans;
+    };
 
     const entryX: string[] = [];
     const entryY: number[] = [];
@@ -121,8 +178,10 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
     const lossSegY: (number | null)[] = [];
 
     for (const t of symTrades) {
-      const eIdx = idxByTime.get(t.entry_time);
-      const xIdx = idxByTime.get(t.exit_time);
+      const eRaw = findBar(t.entry_time);
+      const xRaw = findBar(t.exit_time);
+      const eIdx: number | undefined = eRaw >= 0 ? eRaw : undefined;
+      const xIdx: number | undefined = xRaw >= 0 ? xRaw : undefined;
       const winning = t.pnl_quote > 0;
       const isLong = String(t.direction).toLowerCase().startsWith("long");
       const entryColor = isLong ? "#10b981" : "#a855f7";
@@ -230,11 +289,23 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
           </span>
         </div>
       )}
+      <div className="flex justify-end items-center gap-2 mb-1 text-xs text-slate-500">
+        <span>
+          tf: <span className="text-slate-300">{ohlcv.tf}</span>
+          {ohlcv.tf_requested && ohlcv.tf_requested !== ohlcv.tf && (
+            <span className="text-slate-500"> (auto from {ohlcv.tf_requested})</span>
+          )}
+          {" · "}
+          <span>{ohlcv.n_bars} bars</span>
+        </span>
+        {loading && <span className="text-slate-400 italic">loading…</span>}
+      </div>
       <Plot
         data={traces}
         style={{ width: "100%", height: 380 }}
         useResizeHandler
-        config={{ displaylogo: false, responsive: true }}
+        config={{ displaylogo: false, responsive: true, scrollZoom: true }}
+        onRelayout={handleRelayout}
         layout={{
           paper_bgcolor: "rgba(0,0,0,0)",
           plot_bgcolor: "rgba(0,0,0,0)",
@@ -244,6 +315,10 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
           yaxis: { title: { text: "price" }, gridcolor: "#334155" },
           legend: { orientation: "h", y: -0.18 },
           hovermode: "closest",
+          // uirevision keeps the user's pan/zoom across re-renders driven
+          // by data-only updates (refetched OHLCV for the same view).
+          // Tied to symbol/window so changing strategy/symbol resets it.
+          uirevision: `${activeSymbol}|${start}|${end}`,
         }}
       />
     </div>

@@ -109,6 +109,50 @@ export const HELP: Record<string, string> = {
   "median duration":
     "Median holding period of trades, in hours.",
 
+  // ── Quality / problem indicators (D1) ─────────────────────────────────
+  "Sharpe gap (train→OOS)":
+    "train_sharpe − OOS_sharpe. Classic overfitting signal: if the strategy " +
+    "is really finding edge (not memorising), train and OOS Sharpe should be " +
+    "close. Gap < 0.5 = healthy; 0.5–1.0 = some overfit; > 1.0 = the model " +
+    "fit the training period rather than the market.",
+  "% positive months":
+    "Share of calendar months with a positive compounded return. > 60% = " +
+    "consistent edge; 50–60% = marginal; < 50% = lucky-streak risk. Computed " +
+    "on the synthetic continuous equity (windows stitched).",
+  "Longest underwater":
+    "Maximum number of consecutive bars the equity stayed below its prior " +
+    "peak (in days, calendar). Captures pain duration / recovery time. > 6 " +
+    "months underwater is psychologically hard to sit through in live trading.",
+  "PnL concentration top-1":
+    "Best single trade's PnL as % of |total PnL|. > 50% = the strategy lives " +
+    "or dies on that one trade; 25–50% = somewhat concentrated; < 25% = " +
+    "broadly distributed. Worst-case across walk-forward windows.",
+  "PnL concentration top-5":
+    "Top 5 trades' PnL as % of |total PnL|. > 90% = the entire edge comes " +
+    "from a handful of trades; 60–90% = warning; < 60% = consistent edge.",
+  "Tail ratio":
+    "mean(top-decile bar returns) / |mean(bottom-decile bar returns)|. > 1 = " +
+    "right-tail heavier than left (favourable asymmetry); < 0.7 = losses in " +
+    "the tails dwarf gains. Mean across windows.",
+  "Pain index (Ulcer)":
+    "sqrt(mean(drawdown²)) over all bars. Penalises long drawdowns more than " +
+    "max-DD does. < 0.05 = comfortable; 0.05–0.15 = noticeable pain; > 0.15 = " +
+    "operator will second-guess the strategy mid-run. Worst across windows.",
+  "% time in position":
+    "Fraction of bars where the strategy held a non-zero position. < 20% = " +
+    "mostly sitting in cash (overfit risk on the few bars that matter); " +
+    "30–80% = healthy; > 95% = always in market regardless of regime.",
+  "Avg trade duration":
+    "Mean holding period of round-trip trades, in hours. Compare to the " +
+    "decision TF: 6× TF or longer = strategy is actually riding moves; " +
+    "< 2× TF = whipsawing.",
+  "Skew":
+    "Distribution skew of bar returns. Positive = right tail heavier (good). " +
+    "Negative = left tail heavier (sudden losses).",
+  "Kurt":
+    "Excess kurtosis of bar returns. > 3 = fatter tails than normal; large " +
+    "values mean rare big moves dominate.",
+
   // ── History table headers ──────────────────────────────────────────────
   verdict:
     "KEEP / BASELINE = new best, kept. REVERT = composite didn't beat best, file restored. " +

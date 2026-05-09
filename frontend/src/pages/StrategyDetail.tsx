@@ -13,6 +13,7 @@ import { EquityChart } from "../components/EquityChart";
 import { DrawdownChart } from "../components/DrawdownChart";
 import { PriceChart } from "../components/PriceChart";
 import { MonthlyReturnsHeatmap } from "../components/MonthlyReturnsHeatmap";
+import { QualityIndicators } from "../components/QualityIndicators";
 import { TradesCard } from "../components/TradesCard";
 import { Tooltip } from "../components/Tooltip";
 
@@ -468,6 +469,15 @@ export function StrategyDetail() {
             start={best.period[0]}
             end={best.period[1]}
             tf={best.tf}
+          />
+        </Card>
+      )}
+
+      {best && (
+        <Card title="Quality indicators">
+          <QualityIndicators
+            wf={best.wf_aggregate}
+            oos={best.metrics?.oos}
           />
         </Card>
       )}

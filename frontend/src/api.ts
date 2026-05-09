@@ -21,6 +21,20 @@ export type Metrics = {
   psr?: number;
   sharpe_ci_lo?: number;
   sharpe_ci_hi?: number;
+  // Quality / problem-detection (D1)
+  sharpe_gap?: number | null;
+  pct_positive_months?: number | null;
+  longest_underwater_bars?: number | null;
+  longest_underwater_days?: number | null;
+  pnl_concentration_top1_pct?: number | null;
+  pnl_concentration_top5_pct?: number | null;
+  tail_ratio?: number | null;
+  pain_index?: number | null;
+  pct_time_in_position?: number | null;
+  avg_trade_duration_hours?: number | null;
+  median_trade_duration_hours?: number | null;
+  skew?: number | null;
+  kurt?: number | null;
 };
 
 export type HistoryRow = {
@@ -101,6 +115,20 @@ export type WfAggregate = {
   window_alphas?: (number | null)[];
   n_windows: number;
   window_composites?: number[];
+  // Quality aggregates (D1)
+  mean_pct_positive_months?: number | null;
+  worst_longest_underwater_bars?: number | null;
+  worst_longest_underwater_days?: number | null;
+  worst_pnl_concentration_top5_pct?: number | null;
+  worst_pnl_concentration_top1_pct?: number | null;
+  mean_tail_ratio?: number | null;
+  worst_pain_index?: number | null;
+  mean_pct_time_in_position?: number | null;
+  mean_avg_trade_duration_hours?: number | null;
+  mean_skew?: number | null;
+  mean_kurt?: number | null;
+  worst_sharpe_gap?: number | null;
+  mean_sharpe_gap?: number | null;
 } | null;
 
 export type Job = {

@@ -37,7 +37,8 @@ def run_cpcv(strategy_dir: Path, period_start: str, period_end: str,
              n_groups: int = 10, k_test: int = 2,
              embargo: str | None = "1D",
              cost_model: str = "static",
-             tf: str | None = None) -> dict:
+             tf: str | None = None,
+             lookback: str | None = "60D") -> dict:
     strategy_dir = Path(strategy_dir).resolve()
     runs = strategy_dir / "runs"
     runs.mkdir(exist_ok=True)
@@ -68,7 +69,7 @@ def run_cpcv(strategy_dir: Path, period_start: str, period_end: str,
     # in return_curves with no train metrics waste.
     split = Split(train_start=s, train_end=s, oos_start=s, oos_end=e)
     out = bt.run_split(mod, params, symbols, split, tf=tf, costs=costs,
-                       return_curves=True)
+                       return_curves=True, lookback=lookback)
     if "equity" not in out:
         raise RuntimeError("backtest returned no equity curve; check data availability")
 
@@ -151,11 +152,16 @@ def main() -> None:
                          "pd.Timedelta. Default 1D. Set '0' to disable.")
     ap.add_argument("--cost-model", choices=["static", "spread", "full"],
                     default="static")
+    ap.add_argument("--lookback", default="60D",
+                    help="Pre-load history before period_start so rolling "
+                         "indicators are warm at bar 1 of the CPCV window. "
+                         "Default: 60D.")
     args = ap.parse_args()
 
     rep = run_cpcv(Path(args.strategy_dir), args.start, args.end,
                    n_groups=args.n_groups, k_test=args.k_test,
-                   embargo=args.embargo, cost_model=args.cost_model, tf=args.tf)
+                   embargo=args.embargo, cost_model=args.cost_model, tf=args.tf,
+                   lookback=args.lookback)
     print(json.dumps({
         "iter": rep["iter"],
         "n_paths": rep["n_paths"],

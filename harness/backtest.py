@@ -209,13 +209,32 @@ def _run_vectorbt(prices: pd.DataFrame, target_pos: pd.DataFrame,
 # Main entry points
 # --------------------------------------------------------------------------- #
 def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
-              tf: str = "1h", costs=DEFAULT_COSTS, return_curves: bool = False) -> dict:
+              tf: str = "1h", costs=DEFAULT_COSTS, return_curves: bool = False,
+              lookback: str | pd.Timedelta | None = None) -> dict:
     """Backtest a single train/OOS split. Returns {'train': metrics, 'oos': metrics, ...}.
 
     If `return_curves=True`, also returns 'equity' and 'benchmark' Series spanning
     the full train+OOS window (benchmark = equal-weight buy-and-hold).
+
+    ``lookback`` (e.g. ``"60D"``) pads the data load BEFORE
+    ``split.train_start`` so rolling-indicator strategies have a
+    pre-warmed history at bar 1 instead of wasting the first ~lookback
+    bars of the window emitting empty signals. Mirrors what a live
+    operator does — they look at history, they don't wait for it.
+
+    Mechanics:
+      - load_many is called with ``train_start - lookback`` as start
+      - strategy sees the padded data dict and computes signals over it
+      - vectorbt runs on the full padded range; equity drifts as
+        signals fire during padding
+      - all per-slice metric masks already restrict to ``train_start``
+        onwards so padding doesn't pollute Sharpe / DD / n_trades
+      - return_curves payload is trimmed to ``[train_start, oos_end)``
+        so the dashboard doesn't show padding flats
     """
-    data = load_many(symbols, split.train_start, split.oos_end, tf=tf)
+    lookback_td = pd.Timedelta(lookback) if lookback else pd.Timedelta(0)
+    data_start = split.train_start - lookback_td
+    data = load_many(symbols, data_start, split.oos_end, tf=tf)
     data = {s: df for s, df in data.items() if not df.empty}
     if not data:
         return {"train": {}, "oos": {}, "error": "no data"}
@@ -316,10 +335,15 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         out["oos"]["sharpe_gap"] = None
 
     if return_curves:
-        out["equity"] = adj_equity_full
-        out["raw_equity"] = raw_equity_full
-        out["funding_cashflow"] = fcf
-        out["benchmark"] = bench
+        # Trim curves to the evaluation window [train_start, oos_end).
+        # The padding bars before train_start are blind to the operator's
+        # judgment — they were loaded only so rolling indicators were
+        # warm by bar 1 of the window.
+        ts = split.train_start
+        out["equity"] = adj_equity_full[adj_equity_full.index >= ts]
+        out["raw_equity"] = raw_equity_full[raw_equity_full.index >= ts]
+        out["funding_cashflow"] = fcf[fcf.index >= ts]
+        out["benchmark"] = bench[bench.index >= ts]
         out["split_cutoff"] = split.train_end
 
         # OOS returns slice — used by iterate.py to compute DSR/PSR/CI on the
@@ -348,7 +372,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
         params: dict | None = None, walk_windows: int = 0,
         return_curves: bool = False,
         embargo: str | pd.Timedelta | None = None,
-        costs=None) -> dict:
+        costs=None,
+        lookback: str | pd.Timedelta | None = None) -> dict:
     """Top-level: train/OOS split (and optionally walk-forward), return aggregated metrics.
 
     ``embargo`` injects a gap between train and OOS in every split (single
@@ -368,7 +393,7 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
 
     main_split = train_oos(period_start, period_end, embargo=embargo)
     main = run_split(mod, p, symbols, main_split, tf=tf, costs=costs,
-                     return_curves=return_curves)
+                     return_curves=return_curves, lookback=lookback)
 
     curves = None
     if return_curves and "equity" in main:
@@ -402,7 +427,7 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
                   f"({sp.train_start.date()} -> {sp.oos_end.date()}) running...",
                   flush=True)
             w = run_split(mod, p, symbols, sp, tf=tf, costs=costs,
-                          return_curves=return_curves)
+                          return_curves=return_curves, lookback=lookback)
             oos_sh = (w.get("oos") or {}).get("sharpe", 0.0)
             print(f"[wf] window {i+1}/{len(wf_splits)} done -- OOS Sharpe {oos_sh:+.3f}",
                   flush=True)
@@ -446,6 +471,12 @@ def main() -> None:
                     help="static (default) = legacy flat slippage. "
                          "spread = per-bar half-spread from saved estimates. "
                          "full = spread + size-impact. See harness/costs.py.")
+    ap.add_argument("--lookback", default=None,
+                    help="Pre-load history before each window's train_start "
+                         "by this much (e.g. '60D', '12h'). Lets rolling "
+                         "indicators be warmed by bar 1 of the window instead "
+                         "of wasting the first ~lookback bars. Default: 0 "
+                         "(legacy behavior, blind warmup).")
     args = ap.parse_args()
 
     if args.period:
@@ -471,7 +502,8 @@ def main() -> None:
     costs = CostModel(**cost_kwargs)
 
     res = run(args.strategy_dir, ps, pe, symbols=args.symbols, tf=tf,
-              walk_windows=args.walk, embargo=args.embargo, costs=costs)
+              walk_windows=args.walk, embargo=args.embargo, costs=costs,
+              lookback=args.lookback)
     print(json.dumps(res, indent=2, default=str))
 
 

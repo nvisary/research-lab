@@ -36,7 +36,7 @@ DEFAULT_HOLDOUT_END = "2026-05-01"   # 7-month holdout: 2025-Q4 + 2026-Q1+Apr
 
 
 def run_holdout(strategy_dir: Path, start: str, end: str, tf: str | None = None,
-                audit: bool = True) -> dict:
+                audit: bool = True, lookback: str | None = "60D") -> dict:
     strategy_dir = Path(strategy_dir).resolve()
     runs = strategy_dir / "runs"
     runs.mkdir(exist_ok=True)
@@ -94,7 +94,8 @@ def run_holdout(strategy_dir: Path, start: str, end: str, tf: str | None = None,
     e = pd.Timestamp(end, tz="UTC")
     split = Split(train_start=s, train_end=s, oos_start=s, oos_end=e)
 
-    out = bt.run_split(mod, params, symbols, split, tf=tf, return_curves=True)
+    out = bt.run_split(mod, params, symbols, split, tf=tf,
+                       return_curves=True, lookback=lookback)
     metrics = out.get("oos", {})
     composite = M.composite_score(metrics)
 
@@ -138,9 +139,12 @@ def main() -> None:
                     help="If omitted, read strategy.py:DEFAULT_TF, fall back to '1h'.")
     ap.add_argument("--no-audit", action="store_true",
                     help="Skip lookahead audit (only for trusted strategies).")
+    ap.add_argument("--lookback", default="60D",
+                    help="Pre-load history before holdout start so rolling "
+                         "indicators are warm at bar 1. Default: 60D.")
     args = ap.parse_args()
     rep = run_holdout(Path(args.strategy_dir), args.start, args.end, tf=args.tf,
-                      audit=not args.no_audit)
+                      audit=not args.no_audit, lookback=args.lookback)
     if rep.get("error"):
         print(json.dumps({"audit_failed": rep["audit"], "error": rep["error"]},
                          indent=2, default=str))

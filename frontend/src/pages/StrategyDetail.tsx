@@ -11,6 +11,7 @@ import { fmt, fmtPct, probabilityClass, verdictClass } from "../format";
 import { helpFor } from "../metricsHelp";
 import { EquityChart } from "../components/EquityChart";
 import { DrawdownChart } from "../components/DrawdownChart";
+import { PriceChart } from "../components/PriceChart";
 import { TradesCard } from "../components/TradesCard";
 import { Tooltip } from "../components/Tooltip";
 
@@ -456,6 +457,19 @@ export function StrategyDetail() {
       <Card title="Drawdown (underwater)">
         <DrawdownChart curves={curves} highlightIter={selectedIter ?? undefined} />
       </Card>
+
+      {best && (
+        <Card title="Price chart with trade markers">
+          <PriceChart
+            strategy={name}
+            iter={selectedIter}
+            symbols={best.symbols}
+            start={best.period[0]}
+            end={best.period[1]}
+            tf={best.tf}
+          />
+        </Card>
+      )}
 
       <Card title="Trades">
         <TradesCard strategy={name} iter={selectedIter} />

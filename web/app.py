@@ -395,6 +395,43 @@ def api_holdout_report(name: str):
     return _sanitize({"report": rep, "equity": curve})
 
 
+@app.get("/api/data/ohlcv")
+def api_ohlcv(symbol: str, start: str, end: str, tf: str = "1h"):
+    """OHLCV bars for a symbol over [start, end), resampled to ``tf``.
+
+    Used by the PriceChart component to overlay trade markers on the
+    actual asset price (not equity). Volume is included so the UI can
+    optionally annotate participation. Cap response to 5000 bars to
+    keep payloads manageable; if the period × tf would exceed that,
+    the caller should request a coarser tf.
+    """
+    from datafeed.loader import load
+    try:
+        df = load(symbol, start, end, tf=tf)
+    except Exception as e:
+        raise HTTPException(500, f"loader error: {type(e).__name__}: {e}")
+    if df.empty:
+        raise HTTPException(404, f"no data for {symbol} {start}..{end} {tf}")
+    if len(df) > 5000:
+        raise HTTPException(400,
+                            f"{len(df)} bars > 5000; request a coarser tf "
+                            f"(currently {tf})")
+
+    return _sanitize({
+        "symbol": symbol,
+        "tf": tf,
+        "start": start,
+        "end": end,
+        "n_bars": int(len(df)),
+        "timestamp": [t.isoformat() for t in df.index],
+        "open": df["open"].astype(float).tolist(),
+        "high": df["high"].astype(float).tolist(),
+        "low": df["low"].astype(float).tolist(),
+        "close": df["close"].astype(float).tolist(),
+        "volume": df["volume"].astype(float).tolist(),
+    })
+
+
 @app.get("/api/jobs")
 def api_jobs():
     with JOBS_LOCK:

@@ -173,11 +173,29 @@ export type TradesPayload = {
   top_losers: TradeRow[];
 };
 
+export type OhlcvPayload = {
+  symbol: string;
+  tf: string;
+  start: string;
+  end: string;
+  n_bars: number;
+  timestamp: string[];
+  open: number[];
+  high: number[];
+  low: number[];
+  close: number[];
+  volume: number[];
+};
+
 export const api = {
   strategies: () => j<StrategySummary[]>("/api/strategies"),
   strategy: (name: string) => j<StrategyDetail>(`/api/strategies/${name}`),
   equity: (name: string, iter: number) =>
     j<EquityCurve>(`/api/strategies/${name}/equity/${iter}`),
+  ohlcv: (symbol: string, start: string, end: string, tf: string) =>
+    j<OhlcvPayload>(
+      `/api/data/ohlcv?symbol=${encodeURIComponent(symbol)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&tf=${encodeURIComponent(tf)}`
+    ),
   iterate: (
     name: string,
     body: { start: string; end: string; tf: string; walk: number; note: string }

@@ -478,6 +478,8 @@ export function StrategyDetail() {
           <QualityIndicators
             wf={best.wf_aggregate}
             oos={best.metrics?.oos}
+            strategy={name}
+            iter={selectedIter}
           />
         </Card>
       )}

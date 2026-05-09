@@ -9,13 +9,19 @@
  * Thresholds are deliberately rough — they're decision aids, not
  * statistical assertions. Tune as we get more strategies.
  */
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Tooltip } from "./Tooltip";
-import type { Metrics, WfAggregate } from "../api";
+import { api, type Metrics, type MonthlyReturnsPayload, type WfAggregate } from "../api";
 import { fmt, fmtPct } from "../format";
 import { helpFor } from "../metricsHelp";
 
-type Props = { wf: WfAggregate; oos?: Metrics };
+type Props = {
+  wf: WfAggregate;
+  oos?: Metrics;
+  strategy?: string;
+  iter?: number | null;
+};
 
 type Verdict = "good" | "warn" | "bad" | "neutral";
 
@@ -52,11 +58,43 @@ function Row({
   );
 }
 
-export function QualityIndicators({ wf, oos }: Props) {
+export function QualityIndicators({ wf, oos, strategy, iter }: Props) {
+  // Fetch monthly returns to compute pct_positive_months on the FULL
+  // stitched equity (matches the heatmap below). The backend's
+  // wf_aggregate.mean_pct_positive_months averages per-OOS-window
+  // calculations on slices ~1.3 months long with 1-2 monthly values
+  // each — statistically unreliable. Derived from monthly_returns,
+  // it's consistent with what the operator sees in the heatmap.
+  const [monthly, setMonthly] = useState<MonthlyReturnsPayload | null>(null);
+  useEffect(() => {
+    if (!strategy || iter === null || iter === undefined) {
+      setMonthly(null);
+      return;
+    }
+    let cancelled = false;
+    api.monthlyReturns(strategy, iter)
+      .then((d) => { if (!cancelled) setMonthly(d); })
+      .catch(() => { if (!cancelled) setMonthly(null); });
+    return () => { cancelled = true; };
+  }, [strategy, iter]);
+
+  const pctPosFromStitched = useMemo<number | null>(() => {
+    if (!monthly) return null;
+    const flat = monthly.data.flat().filter((v): v is number => v !== null);
+    if (flat.length === 0) return null;
+    const positive = flat.filter((v) => v > 0).length;
+    return (positive / flat.length) * 100;
+  }, [monthly]);
+
   // Source-of-truth: WF aggregate when present (multi-window iter).
   // Fallback to OOS single-slice metrics for legacy iters.
   const sharpeGap     = wf?.worst_sharpe_gap ?? oos?.sharpe_gap ?? null;
-  const pctPosMonths  = wf?.mean_pct_positive_months ?? oos?.pct_positive_months ?? null;
+  // % positive months: prefer stitched-equity calculation (honest) over
+  // per-window mean (statistically noisy on short OOS slices).
+  const pctPosMonths  = pctPosFromStitched
+    ?? wf?.mean_pct_positive_months
+    ?? oos?.pct_positive_months
+    ?? null;
   const longestUWdays = wf?.worst_longest_underwater_days ?? oos?.longest_underwater_days ?? null;
   const pnlTop1       = wf?.worst_pnl_concentration_top1_pct ?? oos?.pnl_concentration_top1_pct ?? null;
   const pnlTop5       = wf?.worst_pnl_concentration_top5_pct ?? oos?.pnl_concentration_top5_pct ?? null;

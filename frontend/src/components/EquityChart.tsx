@@ -1,3 +1,4 @@
+import { useState } from "react";
 import factoryImport from "react-plotly.js/factory";
 // @ts-expect-error — no types for the dist-min bundle
 import Plotly from "plotly.js-basic-dist-min";
@@ -14,7 +15,54 @@ type Props = {
 
 const WINDOW_COLORS = ["#60a5fa", "#34d399", "#f59e0b", "#a78bfa", "#f472b6", "#22d3ee"];
 
+/** Stitch per-window equity curves into ONE synthetic continuous account.
+ *
+ * Each WF window starts fresh at init_cash ($10k). The visible per-window
+ * curves don't compound across windows — each grows from $10k to ~$10.5k.
+ * This function reads the per-bar returns from each window, concatenates
+ * them chronologically, and compounds back into one equity series — the
+ * "what would happen if I ran this strategy non-stop" view.
+ *
+ * Same arithmetic as harness/runner.iterate uses to write the equity
+ * parquet for the dashboard, just done client-side from already-fetched
+ * data. Returns equity + benchmark in one continuous series starting at
+ * the init_cash of the first window.
+ */
+function stitchEquity(windows: EquityWindow[]):
+    { timestamp: string[]; equity: number[]; benchmark: number[] } {
+  if (windows.length === 0) return { timestamp: [], equity: [], benchmark: [] };
+  const init = windows[0].equity[0] ?? 10000;
+  const benchInit = windows[0].benchmark[0] ?? init;
+
+  type Pt = { ts: string; eqRet: number; bRet: number };
+  const points: Pt[] = [];
+  for (const w of windows) {
+    for (let i = 1; i < w.equity.length; i++) {
+      const eqRet = w.equity[i - 1] !== 0 ? w.equity[i] / w.equity[i - 1] - 1 : 0;
+      const bRet = w.benchmark[i - 1] !== 0
+        ? w.benchmark[i] / w.benchmark[i - 1] - 1 : 0;
+      points.push({ ts: w.timestamp[i], eqRet, bRet });
+    }
+  }
+  points.sort((a, b) => a.ts.localeCompare(b.ts));
+
+  const ts: string[] = [windows[0].timestamp[0]];
+  const eq: number[] = [init];
+  const b: number[] = [benchInit];
+  let curEq = init;
+  let curB = benchInit;
+  for (const p of points) {
+    curEq *= 1 + p.eqRet;
+    curB *= 1 + p.bRet;
+    ts.push(p.ts);
+    eq.push(curEq);
+    b.push(curB);
+  }
+  return { timestamp: ts, equity: eq, benchmark: b };
+}
+
 export function EquityChart({ curves, highlightIter }: Props) {
+  const [stitched, setStitched] = useState(false);
   if (curves.length === 0) {
     return <div className="text-slate-500 italic">no equity yet</div>;
   }
@@ -39,6 +87,35 @@ export function EquityChart({ curves, highlightIter }: Props) {
           benchmark: c.data.benchmark,
           split_cutoff: c.data.split_cutoff,
         }];
+
+    // Stitched mode: render ONE compounded continuous equity line per
+    // iter, not per-window. Bypass the per-window loop below.
+    if (stitched) {
+      const s = stitchEquity(windows);
+      const color = single ? WINDOW_COLORS[0] : undefined;
+      traces.push({
+        x: s.timestamp,
+        y: s.equity,
+        mode: "lines", type: "scatter",
+        name: single ? "equity (stitched)" : `iter ${c.iter} stitched`,
+        legendgroup: single ? "stitched" : `i${c.iter}`,
+        line: { width: c.iter === highlightIter ? 2.5 : single ? 2 : 1.4, color },
+      });
+      if (single) {
+        traces.push({
+          x: s.timestamp, y: s.benchmark,
+          mode: "lines", type: "scatter",
+          name: "buy & hold (stitched)",
+          legendgroup: "stitched",
+          line: { color: "#94a3b8", dash: "dot", width: 1 },
+        });
+      }
+      // Still emit window cutoffs below for the shading.
+      for (const w of windows) {
+        if (w.split_cutoff) cutoffs.push(w.split_cutoff);
+      }
+      continue;
+    }
 
     for (const w of windows) {
       const color = single ? WINDOW_COLORS[w.window % WINDOW_COLORS.length] : undefined;
@@ -139,6 +216,18 @@ export function EquityChart({ curves, highlightIter }: Props) {
   }
 
   return (
+    <div>
+      <label className="text-xs text-slate-400 cursor-pointer select-none mb-2 inline-flex items-center gap-1.5">
+        <input
+          type="checkbox"
+          checked={stitched}
+          onChange={(e) => setStitched(e.target.checked)}
+        />
+        stitched continuous equity
+        <span className="text-slate-600">
+          (compound across windows as if running non-stop with one $10k account)
+        </span>
+      </label>
     <Plot
       data={traces}
       style={{ width: "100%", height: 380 }}
@@ -156,5 +245,6 @@ export function EquityChart({ curves, highlightIter }: Props) {
         annotations,
       }}
     />
+    </div>
   );
 }

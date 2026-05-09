@@ -144,6 +144,50 @@ smaller than directional strategies.
 | 14 | 1d top 20% → 30% | REVERT | +0.42 | 2.40 | 13 | dilution at any TF |
 | 15 | macro regime filter | REVERT | n/a | 0.0 | 0 | impl bug, all longs blocked |
 
+## Holdout result (2026-05-09) — momentum crash
+
+```
+period:           2025-10-01 → 2026-05-01
+sharpe:           -2.65   (vs +2.64 train+val mean)
+bench sharpe:     -1.72   (basket itself crashed in this period)
+alpha:            -0.93
+max DD:           13.8%
+n_trades:         52
+total return:     -12.4%
+composite_holdout: -2.72  vs +0.46 train+val
+```
+
+Sanity check w/ pre-lookback-fix harness behavior (lookback=0):
+  composite -1.66, sharpe -1.59, DD 8.8%. Lookback fix marginally
+  worsened holdout because strategy traded from day 1 at the cycle
+  peak instead of being warmup-blind. Both versions negative — this
+  is a real regime mismatch, not a harness artifact.
+
+Mechanism: the holdout window was the post-peak BTC reversal
+(2025-Q4 cycle top → 2026 correction). xs_momentum picks top-2 by
+60d return — at a cycle peak those are the most-pumped recent
+leaders, which crash hardest in the reversal. Daniel & Moskowitz
+2016 ("Momentum Crashes") describe this in equities: pure momentum
+loses 30%+ at major regime changes. Crypto's faster cycles compress
+the same crash into months.
+
+What CPCV / DSR didn't catch:
+  - CPCV mixes paths within the train+val period — all of which were
+    in the same bull-regime. Path variance ≠ regime-shift variance.
+  - DSR adjusts for trial count but not for regime mismatch.
+  - Both metrics signaled high confidence (DSR 0.86, CPCV median
+    +1.15) but evaluated only on the bull-regime distribution.
+
+Verdict: strategy works in bull regimes, crashes at cycle peaks.
+Known limitation of pure cross-sectional momentum. Not a "wrong"
+strategy — a strategy with a specific regime applicability that was
+not captured by within-train-val statistics.
+
+Holdout is now SPENT for this strategy on this period. Cannot
+re-evaluate the same train+val→holdout split with different
+parameters. Future research on this strategy family must use a
+different out-of-sample window (or wait until more data accrues).
+
 ## Open ideas (next research direction)
 
 - **Lookback 60d → 90d**: continue up the curve, marginal gains expected.

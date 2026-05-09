@@ -8,9 +8,12 @@ export function Layout() {
           <Link to="/" className="font-bold tracking-tight mono">
             researchlab
           </Link>
-          <nav className="text-slate-400 text-sm">
+          <nav className="text-slate-400 text-sm flex gap-4">
             <Link to="/" className="hover:text-slate-100">
               strategies
+            </Link>
+            <Link to="/portfolio" className="hover:text-slate-100">
+              portfolio
             </Link>
           </nav>
         </div>

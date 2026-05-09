@@ -519,6 +519,88 @@ def api_ohlcv(symbol: str, start: str, end: str, tf: str = "1h"):
     })
 
 
+class PortfolioComponentBody(BaseModel):
+    strategy: str
+    capital: float
+    tf: str | None = None
+
+
+class PortfolioRequest(BaseModel):
+    components: list[PortfolioComponentBody]
+    start: str = "2024-01-01"
+    end: str = "2026-01-01"
+    embargo: str | None = "1D"
+    lookback: str | None = "60D"
+    cost_model: str = "static"
+
+
+@app.post("/api/portfolio/run")
+def api_portfolio_run(body: PortfolioRequest):
+    """Run a multi-strategy portfolio with operator-specified capital
+    allocations. Returns combined equity, per-strategy contributions,
+    portfolio metrics, and the strategies' return-correlation matrix.
+
+    Each component is backtested independently (Path B) with its own
+    capital — no shared cash pool, no position aggregation. Realistic
+    for sub-strategies running on separate sub-accounts.
+
+    Slow on first call (re-runs each strategy backtest, ~30s each).
+    No cache — rerun cost is acceptable for the small number of
+    strategies a researcher typically combines.
+    """
+    from runner.portfolio import run_portfolio, PortfolioComponent
+    if not body.components:
+        raise HTTPException(400, "at least one component required")
+    components = [
+        PortfolioComponent(strategy=c.strategy, capital=c.capital, tf=c.tf)
+        for c in body.components
+    ]
+    for c in components:
+        if not (STRATS / c.strategy).exists():
+            raise HTTPException(404, f"unknown strategy: {c.strategy}")
+        if c.capital <= 0:
+            raise HTTPException(400, f"capital must be > 0 (got {c.capital} for {c.strategy})")
+
+    try:
+        rep = run_portfolio(
+            components,
+            period_start=body.start,
+            period_end=body.end,
+            embargo=body.embargo,
+            lookback=body.lookback,
+            cost_model=body.cost_model,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"portfolio run failed: {type(e).__name__}: {e}")
+
+    return _sanitize(rep)
+
+
+@app.get("/api/portfolio/strategies")
+def api_portfolio_list_strategies():
+    """List strategies available for portfolio composition. Each entry
+    includes minimal metadata from best.json so the UI can show iter
+    number / composite without an extra fetch per strategy."""
+    if not STRATS.exists():
+        return []
+    out = []
+    for d in sorted(p for p in STRATS.iterdir() if p.is_dir()):
+        best_path = d / "runs" / "best.json"
+        meta = {"name": d.name, "best_iter": None, "best_composite": None,
+                "tf": None, "symbols": []}
+        if best_path.exists():
+            try:
+                b = json.loads(best_path.read_text(encoding="utf-8"))
+                meta["best_iter"] = b.get("iter")
+                meta["best_composite"] = b.get("composite")
+                meta["tf"] = b.get("tf")
+                meta["symbols"] = b.get("symbols", [])
+            except Exception:
+                pass
+        out.append(meta)
+    return out
+
+
 @app.get("/api/jobs")
 def api_jobs():
     with JOBS_LOCK:

@@ -210,6 +210,52 @@ export type MonthlyReturnsPayload = {
   n_months: number;
 };
 
+export type PortfolioComponent = {
+  strategy: string;
+  capital: number;
+  tf?: string | null;
+};
+
+export type PortfolioStrategyMeta = {
+  name: string;
+  best_iter: number | null;
+  best_composite: number | null;
+  tf: string | null;
+  symbols: string[];
+};
+
+export type PortfolioReport = {
+  ran_at: string;
+  components: PortfolioComponent[];
+  period: [string, string];
+  embargo: string | null;
+  lookback: string | null;
+  cost_model: string;
+  total_capital: number;
+  final_equity: number;
+  total_pnl_dollar: number;
+  total_pnl_pct: number;
+  combined_curve: {
+    timestamp: string[];
+    equity: number[];
+    benchmark: number[];
+  };
+  per_strategy_curves: Record<string, {
+    timestamp: string[];
+    equity: number[];
+    benchmark: number[];
+  }>;
+  per_strategy: Record<string, {
+    capital: number;
+    metrics: Record<string, any>;
+    final_equity: number;
+    pnl_dollar: number;
+    pnl_pct: number;
+  }>;
+  portfolio_metrics: Record<string, any>;
+  correlation_matrix: Record<string, Record<string, number | null>>;
+};
+
 export type OhlcvPayload = {
   symbol: string;
   tf: string;
@@ -233,6 +279,21 @@ export const api = {
     j<MonthlyReturnsPayload>(
       `/api/strategies/${name}/monthly-returns/${iter}`
     ),
+  portfolioStrategies: () =>
+    j<PortfolioStrategyMeta[]>("/api/portfolio/strategies"),
+  portfolioRun: (body: {
+    components: PortfolioComponent[];
+    start: string;
+    end: string;
+    embargo?: string;
+    lookback?: string;
+    cost_model?: string;
+  }) =>
+    j<PortfolioReport>("/api/portfolio/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   ohlcv: (symbol: string, start: string, end: string, tf: string) =>
     j<OhlcvPayload>(
       `/api/data/ohlcv?symbol=${encodeURIComponent(symbol)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&tf=${encodeURIComponent(tf)}`

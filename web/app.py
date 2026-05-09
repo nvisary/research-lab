@@ -241,6 +241,93 @@ def api_equity(name: str, iter_id: int):
     })
 
 
+@app.get("/api/strategies/{name}/monthly-returns/{iter_id}")
+def api_monthly_returns(name: str, iter_id: int):
+    """Monthly compounded returns for an iter, suitable for a heatmap.
+
+    Computed on the SAVED equity curve (post-funding-adjusted, since
+    that's what the harness writes). For walk-forward iters the
+    equity parquet has a `window` column; we compound across windows
+    in chronological order so the heatmap shows the strategy's full
+    realised return path.
+
+    Response shape:
+      years: [2024, 2025, 2026]
+      months: [1..12]                (always)
+      data: [[ret_2024_jan, ret_2024_feb, ..., None for missing], ...]
+      Where each cell is a fraction (0.05 = +5%) or null.
+    """
+    d = _strategy_dir(name)
+    p = d / "runs" / "equity" / f"iter_{iter_id:04d}.parquet"
+    if not p.exists():
+        raise HTTPException(404, f"no equity for iter {iter_id}")
+    df = pd.read_parquet(p)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.sort_values("timestamp")
+
+    if "window" in df.columns:
+        # Stitch windows: each window's equity is rebased to its own
+        # init_cash. To get a continuous "if you ran this strategy
+        # forever" curve, compound returns across windows by chaining
+        # the percentage paths.
+        rets = []
+        for _, g in df.groupby("window"):
+            g = g.sort_values("timestamp")
+            r = g["equity"].pct_change().fillna(0.0)
+            rets.append(pd.Series(r.values, index=g["timestamp"]))
+        rets_concat = pd.concat(rets).sort_index()
+    else:
+        rets_concat = df.set_index("timestamp")["equity"].pct_change().fillna(0.0)
+
+    # Build a synthetic continuous equity, compound it, then resample.
+    eq_synth = (1.0 + rets_concat).cumprod()
+    monthly = eq_synth.resample("MS").last().pct_change().dropna()
+
+    if monthly.empty:
+        return _sanitize({
+            "iter": iter_id, "years": [], "months": list(range(1, 13)), "data": [],
+        })
+
+    pivot = pd.DataFrame({
+        "ret": monthly.values,
+        "year": monthly.index.year,
+        "month": monthly.index.month,
+    }).pivot(index="year", columns="month", values="ret").reindex(columns=range(1, 13))
+
+    years = [int(y) for y in pivot.index.tolist()]
+    data: list[list] = []
+    for y in pivot.index:
+        row = []
+        for m in range(1, 13):
+            v = pivot.loc[y, m] if m in pivot.columns else float("nan")
+            if pd.isna(v):
+                row.append(None)
+            else:
+                row.append(float(v))
+        data.append(row)
+
+    # Year-summary column: full-year compounded return where the year is
+    # complete-ish (>= 6 months of data). Useful for the "% per year if
+    # set-and-forget" question.
+    year_returns: list = []
+    for y in years:
+        row_vals = pivot.loc[y].dropna()
+        if len(row_vals) == 0:
+            year_returns.append(None)
+        else:
+            yr = float((1.0 + row_vals).prod() - 1.0)
+            year_returns.append(yr)
+
+    return _sanitize({
+        "iter": iter_id,
+        "years": years,
+        "months": list(range(1, 13)),
+        "data": data,
+        "year_returns": year_returns,
+        "n_months": int(len(monthly)),
+    })
+
+
 class IterateRequest(BaseModel):
     start: str = "2024-01-01"
     end: str = "2025-10-01"

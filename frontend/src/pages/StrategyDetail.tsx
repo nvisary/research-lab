@@ -12,6 +12,7 @@ import { helpFor } from "../metricsHelp";
 import { EquityChart } from "../components/EquityChart";
 import { DrawdownChart } from "../components/DrawdownChart";
 import { PriceChart } from "../components/PriceChart";
+import { MonthlyReturnsHeatmap } from "../components/MonthlyReturnsHeatmap";
 import { TradesCard } from "../components/TradesCard";
 import { Tooltip } from "../components/Tooltip";
 
@@ -470,6 +471,10 @@ export function StrategyDetail() {
           />
         </Card>
       )}
+
+      <Card title="Monthly returns">
+        <MonthlyReturnsHeatmap strategy={name} iter={selectedIter} />
+      </Card>
 
       <Card title="Trades">
         <TradesCard strategy={name} iter={selectedIter} />

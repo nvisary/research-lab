@@ -132,6 +132,45 @@ def test_lookback_trims_curves():
     assert bench.index[0] >= s
 
 
+def test_padding_period_does_not_trade():
+    """The lookback padding period exists for indicator warmup ONLY —
+    the strategy must NOT be allowed to take positions during it.
+
+    Regression test: prior to the fix, vectorbt happily acted on signals
+    emitted during the padded data_start..train_start window, and these
+    padding-period entries leaked into the saved trade ledger and equity
+    curve. Symptoms: per-window starting equity != init_cash, trade count
+    inflated by padding trades, and PnL double-counted across overlapping
+    WF window calendar dates.
+    """
+    mod = _make_sma_crossover_strategy(fast=5, slow=15)
+    s = pd.Timestamp(PERIOD_START, tz="UTC")
+    e = pd.Timestamp(PERIOD_END, tz="UTC")
+    split = Split(s, s + (e - s) * 0.5, s + (e - s) * 0.5, e)
+
+    out = bt.run_split(mod, {"fast": 5, "slow": 15}, ["BTCUSDT"], split,
+                       tf="1h", costs=CostModel(apply_funding=False),
+                       return_curves=True, lookback="30D")
+
+    # Equity must start at exactly init_cash ($10k) at train_start.
+    # Pre-fix: it would start at whatever PnL accumulated during the
+    # 30-day padding period.
+    eq = out["equity"]
+    assert abs(float(eq.iloc[0]) - 10_000.0) < 1e-6, (
+        f"equity starts at {eq.iloc[0]:.2f}, expected exactly 10000.00 "
+        f"(padding-period trades leaked into starting equity)"
+    )
+
+    # No trade in the ledger may have entry_time before train_start.
+    trades = out.get("trades")
+    if trades is not None and not trades.empty:
+        pad_trades = trades[trades["entry_time"] < s]
+        assert len(pad_trades) == 0, (
+            f"{len(pad_trades)} trade(s) with entry_time < train_start={s} "
+            f"leaked from padding period; first: {pad_trades.iloc[0].to_dict()}"
+        )
+
+
 def test_lookback_with_unavailable_data_degrades_silently():
     """If padding goes before earliest available data, the loader simply
     returns what's available. No crash, no missing-data error."""

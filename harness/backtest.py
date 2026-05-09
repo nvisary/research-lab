@@ -264,6 +264,16 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     # Force flat on stale bars: closes any open position at the last known
     # price and prevents re-entry while data is still missing.
     target = target.where(~stale_mask.reindex_like(target).fillna(False), 0.0)
+    # Force flat during the lookback PADDING period (bars before train_start).
+    # Padding exists so rolling indicators are warm by bar 1 of the window —
+    # the strategy is NOT supposed to trade during it. Without this guard,
+    # vectorbt happily acts on padding-period signals and the resulting
+    # entries leak into the saved equity (per-window starting equity != init_cash)
+    # and trade ledger (n_trades / total_pnl inflated by padding trades that
+    # also overlap calendar-wise with the prior WF window's evaluation slice,
+    # double-counting their PnL).
+    if split.train_start in target.index or (target.index < split.train_start).any():
+        target.loc[target.index < split.train_start, :] = 0.0
 
     pf = _run_vectorbt(prices, target, costs=costs, volumes=raw_volumes)
 
@@ -343,7 +353,16 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         out["equity"] = adj_equity_full[adj_equity_full.index >= ts]
         out["raw_equity"] = raw_equity_full[raw_equity_full.index >= ts]
         out["funding_cashflow"] = fcf[fcf.index >= ts]
-        out["benchmark"] = bench[bench.index >= ts]
+        # Benchmark was normalised at the first PADDED bar (data_start),
+        # so by the time we trim to train_start it has already absorbed
+        # the padding-period market drift. Rebase so bench starts at the
+        # same value as equity at train_start — i.e. "$10k buy-and-hold
+        # starting at the window's first evaluation bar".
+        bench_trim = bench[bench.index >= ts]
+        if not bench_trim.empty and not out["equity"].empty:
+            scale = float(out["equity"].iloc[0]) / float(bench_trim.iloc[0])
+            bench_trim = bench_trim * scale
+        out["benchmark"] = bench_trim
         out["split_cutoff"] = split.train_end
 
         # OOS returns slice — used by iterate.py to compute DSR/PSR/CI on the

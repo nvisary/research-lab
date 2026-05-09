@@ -8,5 +8,5 @@ uv.lock
 frontend/node_modules/
 frontend/dist/
 .claude/settings.local.json
-strategies/*/runs/**
-!strategies/*/runs/.gitkeep
+strategies/**/runs/**
+!strategies/**/runs/.gitkeep

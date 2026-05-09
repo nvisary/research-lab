@@ -36,16 +36,45 @@ hypothesis per iteration, one change per code edit. Stop conditions
 same as the loop: 5 consecutive REVERTs without a KEEP → write up
 ruled-out, ask user for direction change.
 
-## Champion (iter 3)
+## Champion (iter 11) — replaces iter 3 4h champion
 
 ```
 DEFAULT_SYMBOLS = 10 majors (BTC ETH SOL BNB XRP ADA DOGE AVAX LINK LTC)
-DEFAULT_TF      = "4h"
-lookback_bars   = 360         # 60d
+DEFAULT_TF      = "1d"        ← upgraded from 4h
+lookback_bars   = 60          # = 60 calendar days (same horizon as 60d/4h, coarser bars)
 top_quantile    = 0.20        # top 2 long
 bot_quantile    = 0.20        # (unused — long_only)
 long_only       = 1
 ```
+
+WF metrics:
+- composite **+0.46** (vs iter 3: +0.42)
+- OOS Sharpe (mean) **+2.64** (vs iter 3: +2.29)
+- per-window OOS Sharpe: **+3.41 / +8.07 / +1.05 / -1.96**
+- max DD (worst window) **1.80%** (vs iter 3: 2.19%)
+- n_trades **5** (down from 14 — coarser TF = less rebal noise; penalty applies)
+- DSR 0.86
+- **alpha vs b&h +0.18** (bench was +2.46) — **FIRST POSITIVE alpha across 5 cycles**
+- per-window alpha: **+0.72 / +1.05 / +0.75 / -1.78** — 3/4 positive, only W4 weak
+- pct_positive_months 75% per-window mean (~65% on stitched, see frontend fixes)
+
+CPCV (45 paths):
+- median **+1.15** (slightly down from iter 3: +1.27 — fewer bars per OOS slice = noisier median)
+- mean **+1.39** (up from iter 3: +1.14)
+- IQR **[+0.25, +2.56]** — 25th percentile no longer negative; tail shifted into clear-positive
+- 78% paths positive (up from 71%)
+- 53% paths Sharpe > 1
+- worst max_dd **6.84%** (down from 7.64%)
+
+Net: iter 11 is a marginal but meaningful improvement on EVERY axis except
+median CPCV (lateral, within noise). The IQR shift is the key — bad
+scenarios at 1d champion are no longer net-negative.
+
+## Champion was (iter 3)
+
+iter 3 retired as champion. Same structure but TF=4h, lookback=360 bars.
+Composite +0.42, OOS Sharpe +2.29, alpha -0.011. Kept here as research
+record showing the 4h baseline before TF improvement.
 
 WF metrics:
 - composite **+0.42**
@@ -70,6 +99,14 @@ smaller than directional strategies.
 
 ## What's been ruled out
 
+- **lookback 90d at both TFs (iters 10, 12, REVERT)** — sweet spot is
+  60 calendar days at both 4h and 1d. 90d misses regime turns.
+- **lookback 30d at 1d (iter 13, REVERT)** — too short even at coarse TF.
+- **top_quantile 30% at 1d (iter 14, REVERT)** — same dilution effect as
+  at 4h. 3rd-ranked symbol weakens signal.
+- **macro regime filter (iter 15, REVERT — impl bug)** — pandas Series
+  broadcasting on 2D mask collapsed long_mask to all-False. Implementation
+  needs revisiting; the hypothesis itself remains unevaluated.
 - **Long+short market-neutral (iter 1, baseline)** — short leg loses
   structurally in bull regimes (alts catch up = short squeeze). Asymmetric
   reversal: longs have momentum, shorts have reversal. Alpha -3.37.
@@ -100,6 +137,12 @@ smaller than directional strategies.
 | 7 | (no-op after iter 6 revert) | REVERT | 0.42 | 2.29 | 14 | no edit lost vs baseline |
 | 8 | top 10% (1 long) | REVERT | -1.58 | 0.80 | 15 | volatile concentration |
 | 9 | Antonacci dual momentum | REVERT | -2.18 | 0.36 | 10 | filter too aggressive |
+| 10 | 4h lookback 60d → 90d | REVERT | -1.03 | 0.92 | 23 | misses regime turns |
+| 11 | TF 4h → 1d (lookback 60d) | **KEEP** | **+0.46** | +2.64 | 5 | **NEW CHAMPION**; first +alpha |
+| 12 | 1d lookback 60 → 90d | REVERT | -0.31 | 1.73 | 7 | same pattern as 4h |
+| 13 | 1d lookback 60 → 30d | REVERT | -0.39 | 1.56 | 12 | too short |
+| 14 | 1d top 20% → 30% | REVERT | +0.42 | 2.40 | 13 | dilution at any TF |
+| 15 | macro regime filter | REVERT | n/a | 0.0 | 0 | impl bug, all longs blocked |
 
 ## Open ideas (next research direction)
 

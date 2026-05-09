@@ -54,10 +54,10 @@ DEFAULT_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",
 ]
-DEFAULT_TF = "4h"
+DEFAULT_TF = "1d"
 
 DEFAULT_PARAMS = {
-    "lookback_bars": 360,    # ~60d at 4h (academic momentum standard)
+    "lookback_bars": 60,     # 60 calendar days at 1d TF (same horizon as 60d/4h)
     "top_quantile": 0.20,    # top 20% long
     "bot_quantile": 0.20,    # bottom 20% short
     "long_only": 1,          # 0 = market-neutral long+short, 1 = long-only

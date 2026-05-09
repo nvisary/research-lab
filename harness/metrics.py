@@ -118,9 +118,46 @@ def hit_rate(returns: pd.Series) -> float:
     return float((r > 0).mean())
 
 
+def capacity_metrics(trades_in_slice: pd.DataFrame,
+                     warn_threshold_pct: float = 5.0) -> dict:
+    """Trade-size-vs-volume capacity diagnostics.
+
+    Operates on a trades DataFrame with a ``participation_pct`` column
+    (added in harness/backtest.py from daily $-volume divided into
+    entry notional). Returns NaN-filled dict if column is missing or
+    all values are NaN — i.e. no volume data was available.
+
+    A strategy whose ``max_participation_pct > 5%`` will, in live
+    trading, materially move price against itself; the static cost
+    model under-charges. Surface this so the operator can either cap
+    size, pick more liquid symbols, or accept the bias explicitly.
+    """
+    out = {
+        "max_participation_pct": None,
+        "mean_participation_pct": None,
+        "pct_trades_over_threshold": None,
+        "n_trades_over_threshold": 0,
+        "capacity_threshold_pct": warn_threshold_pct,
+    }
+    if trades_in_slice is None or trades_in_slice.empty:
+        return out
+    if "participation_pct" not in trades_in_slice.columns:
+        return out
+    p = trades_in_slice["participation_pct"].dropna()
+    if p.empty:
+        return out
+    over = p > warn_threshold_pct
+    out["max_participation_pct"] = float(p.max())
+    out["mean_participation_pct"] = float(p.mean())
+    out["pct_trades_over_threshold"] = float(over.mean() * 100.0)
+    out["n_trades_over_threshold"] = int(over.sum())
+    return out
+
+
 def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
             n_trades: int, tf: str | None = None,
-            benchmark: pd.Series | None = None) -> dict:
+            benchmark: pd.Series | None = None,
+            trades_in_slice: pd.DataFrame | None = None) -> dict:
     # PSR is computed inline; DSR (which needs n_trials) is added by the caller.
     from harness.stats import psr as _psr, bootstrap_sharpe_ci as _ci
     sh = sharpe(returns, tf=tf)
@@ -133,6 +170,7 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
     bench_sh: float | None = None
     if benchmark is not None and len(benchmark.dropna()) > 1:
         bench_sh = float(sharpe(benchmark.pct_change(), tf=tf))
+    cap = capacity_metrics(trades_in_slice)
     return {
         "sharpe": sh,
         "bench_sharpe": bench_sh,
@@ -149,6 +187,7 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
         "psr": float(psr_value),
         "sharpe_ci_lo": float(ci_lo),
         "sharpe_ci_hi": float(ci_hi),
+        **cap,
     }
 
 
@@ -213,6 +252,14 @@ def aggregate_wf_composite(window_metrics: list[dict],
     sharpes = [m.get("sharpe", 0.0) for m in window_metrics]
     dds = [m.get("max_dd", 0.0) for m in window_metrics]
     trades = [m.get("n_trades", 0) for m in window_metrics]
+    # Capacity: max-of-max across windows is the conservative aggregate.
+    # mean-of-means averages out per-window noise. A strategy is
+    # capacity-limited if ANY window touches the threshold.
+    max_parts = [m.get("max_participation_pct") for m in window_metrics]
+    max_parts_clean = [p for p in max_parts if p is not None]
+    mean_parts = [m.get("mean_participation_pct") for m in window_metrics]
+    mean_parts_clean = [p for p in mean_parts if p is not None]
+    n_over = sum(int(m.get("n_trades_over_threshold", 0) or 0) for m in window_metrics)
     cagrs = [m.get("cagr", 0.0) for m in window_metrics]
     total_returns = [m.get("total_return", 0.0) for m in window_metrics]
     bench_sharpes = [m.get("bench_sharpe") for m in window_metrics]
@@ -235,4 +282,9 @@ def aggregate_wf_composite(window_metrics: list[dict],
         "window_alphas": alphas,
         "n_windows": len(window_metrics),
         "window_composites": composites,
+        "max_participation_pct": (float(np.max(max_parts_clean))
+                                  if max_parts_clean else None),
+        "mean_participation_pct": (float(np.mean(mean_parts_clean))
+                                   if mean_parts_clean else None),
+        "n_trades_over_threshold": int(n_over),
     }

@@ -521,6 +521,23 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
     }
     _append_history(runs, row)
 
+    # Capacity: report worst-window max participation. Only flag in
+    # summary when above the threshold (5% by default in capacity_metrics)
+    # so the iter loop noise stays low; the full numbers are in
+    # history.jsonl / wf_aggregate / metrics_oos for inspection.
+    cap_max = (wf_agg or {}).get("max_participation_pct") if wf_agg else \
+              oos.get("max_participation_pct")
+    cap_n_over = (wf_agg or {}).get("n_trades_over_threshold") if wf_agg else \
+                 oos.get("n_trades_over_threshold")
+    capacity_warning = None
+    if cap_max is not None and cap_max > 5.0:
+        capacity_warning = (
+            f"max_participation_pct={cap_max:.1f}% (>5%); "
+            f"{cap_n_over or 0} trade(s) over threshold. "
+            f"Static slippage under-charges; consider --cost-model full "
+            f"or smaller size."
+        )
+
     summary = {
         "iter": iter_id,
         "verdict": verdict,
@@ -530,6 +547,8 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "oos_max_dd": round(oos.get("max_dd", 0.0), 4),
         "oos_n_trades": oos.get("n_trades", 0),
         "dsr": round(dsr_value, 4),
+        "max_participation_pct": (round(cap_max, 2) if cap_max is not None else None),
+        "capacity_warning": capacity_warning,
         "error": error,
     }
     return summary

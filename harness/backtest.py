@@ -58,6 +58,93 @@ def load_strategy(strategy_dir: Path):
 # --------------------------------------------------------------------------- #
 # Signal → portfolio
 # --------------------------------------------------------------------------- #
+def _build_standardized_trades(pf, train_end: pd.Timestamp) -> pd.DataFrame:
+    """Pull pf.trades.records_readable, rename to project conventions,
+    add `slice` (train/oos) tag based on entry time vs train_end.
+
+    Returns an empty DataFrame on any error or empty trade set —
+    callers must handle.
+    """
+    try:
+        tr = pf.trades.records_readable.copy()
+    except Exception:
+        return pd.DataFrame()
+    if tr.empty:
+        return pd.DataFrame()
+    rename = {
+        "Entry Timestamp": "entry_time",
+        "Exit Timestamp": "exit_time",
+        "Avg Entry Price": "entry_price",
+        "Avg Exit Price": "exit_price",
+        "Size": "size",
+        "Direction": "direction",
+        "PnL": "pnl_quote",
+        "Return": "return_pct",
+        "Column": "symbol",
+    }
+    tr = tr.rename(columns={k: v for k, v in rename.items() if k in tr.columns})
+    if "entry_time" in tr.columns:
+        tr["entry_time"] = pd.to_datetime(tr["entry_time"], utc=True)
+    if "exit_time" in tr.columns:
+        tr["exit_time"] = pd.to_datetime(tr["exit_time"], utc=True)
+        if "entry_time" in tr.columns:
+            tr["duration_hours"] = (tr["exit_time"] - tr["entry_time"]).dt.total_seconds() / 3600.0
+    if "symbol" in tr.columns:
+        tr["symbol"] = tr["symbol"].apply(lambda c: c[-1] if isinstance(c, tuple) else c)
+    if "entry_time" in tr.columns:
+        tr["slice"] = pd.Series(
+            np.where(tr["entry_time"] < train_end, "train", "oos"),
+            index=tr.index,
+        )
+    return tr.reset_index(drop=True)
+
+
+def _augment_trades_with_capacity(trades: pd.DataFrame,
+                                   prices_wide: pd.DataFrame,
+                                   volumes_wide: pd.DataFrame) -> pd.DataFrame:
+    """Add capacity columns to a trade ledger.
+
+    For each trade, compute:
+      entry_notional_usd  = |size| * entry_price
+      entry_daily_volume_usd = sum_t (price * volume) on the entry date
+      participation_pct = entry_notional / entry_daily_volume_usd * 100
+
+    Symbols / dates with missing volume yield NaN. The dashboard and
+    metrics aggregator both tolerate NaN.
+
+    Operates on a trade DataFrame already standardized by run_split's
+    rename map (entry_time, entry_price, size, symbol). Pre-rename
+    callers should use _augment_trades_records_with_capacity instead.
+    """
+    if trades is None or trades.empty:
+        return trades
+    out = trades.copy()
+    if "entry_time" not in out.columns or "entry_price" not in out.columns:
+        return out
+
+    # Daily notional ($) per symbol
+    daily_usd = (prices_wide * volumes_wide.reindex_like(prices_wide)).resample("1D").sum()
+
+    entry_notional = (out["size"].abs() * out["entry_price"].abs()).astype(float)
+    entry_dates = out["entry_time"].dt.floor("1D")
+    syms = out["symbol"].astype(str)
+
+    daily_lookups = []
+    for d, s in zip(entry_dates, syms):
+        try:
+            v = float(daily_usd.loc[d, s])
+        except (KeyError, TypeError):
+            v = float("nan")
+        daily_lookups.append(v)
+    out["entry_notional_usd"] = entry_notional
+    out["entry_daily_volume_usd"] = daily_lookups
+    # Avoid div-by-zero / NaN noise: where volume is 0 or NaN, leave NaN.
+    pct = entry_notional / pd.Series(daily_lookups, index=out.index)
+    pct = pct.replace([float("inf"), float("-inf")], float("nan")) * 100.0
+    out["participation_pct"] = pct
+    return out
+
+
 def _positions_to_wide(signals: pd.DataFrame, symbols: list[str],
                        index: pd.DatetimeIndex) -> pd.DataFrame:
     """Convert long-format [timestamp, symbol, position] into wide DataFrame
@@ -152,6 +239,14 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     except Exception:
         entry_times = pd.Series(dtype="datetime64[ns, UTC]")
 
+    # Build a standardized trade ledger once — used for both per-slice
+    # capacity metrics (always) and the trades artifact (when
+    # return_curves=True). Cheap; trade count is bounded by walk_window
+    # length × strategy turnover.
+    trades_all_df = _build_standardized_trades(pf, split.train_end)
+    if not trades_all_df.empty:
+        trades_all_df = _augment_trades_with_capacity(trades_all_df, raw_prices, raw_volumes)
+
     # Funding adjustment: subtract cumulative funding cashflows from equity.
     # The harness uses adjusted-equity returns for ALL metrics; raw equity is
     # kept around only for diagnostics in return_curves.
@@ -183,8 +278,15 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         rets = adj_returns_full[mask]
         positions = target[mask]
         n_trades = int(((entry_times >= lo) & (entry_times < hi)).sum()) if len(entry_times) else 0
+        if not trades_all_df.empty:
+            slice_trades = trades_all_df[
+                (trades_all_df["entry_time"] >= lo) & (trades_all_df["entry_time"] < hi)
+            ]
+        else:
+            slice_trades = trades_all_df
         out[label] = M.summary(equity, rets, positions, n_trades=n_trades, tf=tf,
-                                benchmark=bench[mask])
+                                benchmark=bench[mask],
+                                trades_in_slice=slice_trades)
 
     if return_curves:
         out["equity"] = adj_equity_full
@@ -200,40 +302,17 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         out["oos_returns"] = adj_returns_full[oos_mask]
 
         # Standardized trade ledger for the dashboard / per-iter analysis.
-        try:
-            tr = pf.trades.records_readable.copy()
-            if not tr.empty:
-                rename = {
-                    "Entry Timestamp": "entry_time",
-                    "Exit Timestamp": "exit_time",
-                    "Avg Entry Price": "entry_price",
-                    "Avg Exit Price": "exit_price",
-                    "Size": "size",
-                    "Direction": "direction",
-                    "PnL": "pnl_quote",
-                    "Return": "return_pct",
-                    "Column": "symbol",
-                }
-                tr = tr.rename(columns={k: v for k, v in rename.items() if k in tr.columns})
-                tr["entry_time"] = pd.to_datetime(tr["entry_time"], utc=True)
-                tr["exit_time"] = pd.to_datetime(tr["exit_time"], utc=True)
-                tr["duration_hours"] = (tr["exit_time"] - tr["entry_time"]).dt.total_seconds() / 3600.0
-                if "symbol" in tr.columns:
-                    tr["symbol"] = tr["symbol"].apply(
-                        lambda c: c[-1] if isinstance(c, tuple) else c)
-                # Tag the slice each trade belongs to for window-aware analysis.
-                tr["slice"] = pd.Series(
-                    np.where(tr["entry_time"] < split.train_end, "train", "oos"),
-                    index=tr.index,
-                )
-                keep_cols = [c for c in [
-                    "entry_time", "exit_time", "symbol", "direction",
-                    "size", "entry_price", "exit_price",
-                    "pnl_quote", "return_pct", "duration_hours", "slice",
-                ] if c in tr.columns]
-                out["trades"] = tr[keep_cols].reset_index(drop=True)
-        except Exception:
-            out["trades"] = pd.DataFrame()
+        # Already built and augmented above; just expose it on the curves dict.
+        if not trades_all_df.empty:
+            keep_cols = [c for c in [
+                "entry_time", "exit_time", "symbol", "direction",
+                "size", "entry_price", "exit_price",
+                "pnl_quote", "return_pct", "duration_hours", "slice",
+                "entry_notional_usd", "entry_daily_volume_usd", "participation_pct",
+            ] if c in trades_all_df.columns]
+            out["trades"] = trades_all_df[keep_cols].reset_index(drop=True)
+        else:
+            out["trades"] = trades_all_df
     return out
 
 

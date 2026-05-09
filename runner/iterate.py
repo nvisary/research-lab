@@ -56,6 +56,14 @@ class IterationConfig:
     # lookbacks; at 5m TF it's 288 bars (covers a 200-bar SMA). Set to "0"
     # to disable. See harness/splits.py for the rationale.
     embargo: str = "1D"
+    # Cost model:
+    #   "static" — legacy flat 1bp slippage (backwards-compatible).
+    #   "spread" — per-bar half-spread from data/meta/spreads/.
+    #   "full"   — spread + size-impact via depth proxy.
+    # Static is the default to preserve baseline comparability with
+    # pre-existing best.json. Switch to "spread" or "full" deliberately
+    # when the operator is ready to re-establish baselines.
+    cost_model: str = "static"
     stability_penalty: float = 0.5
     dd_penalty: float = 0.5
     min_trades: int = 50
@@ -254,9 +262,16 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
 
     error = None
     try:
+        from harness.costs import CostModel
+        cost_kwargs = {
+            "static": {},
+            "spread": {"use_dynamic_spread": True},
+            "full": {"use_dynamic_spread": True, "use_dynamic_slippage": True},
+        }[cfg.cost_model]
+        costs = CostModel(**cost_kwargs)
         result = bt.run(strategy_dir, cfg.period_start, cfg.period_end,
                         tf=cfg.tf, walk_windows=cfg.walk_windows,
-                        embargo=cfg.embargo,
+                        embargo=cfg.embargo, costs=costs,
                         return_curves=True)
     except Exception as e:
         error = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=3)}"
@@ -536,6 +551,12 @@ def main() -> None:
                          "as pd.Timedelta (e.g. '1D', '12h', '144min'). "
                          "Default: 1D. Set to '0' to disable. "
                          "See harness/splits.py for the rationale.")
+    ap.add_argument("--cost-model", choices=["static", "spread", "full"],
+                    default="static",
+                    help="static (default) = legacy flat 1bp slippage. "
+                         "spread = per-bar half-spread from saved estimates. "
+                         "full = spread + size-impact. Switching changes "
+                         "score scale; baselines will need re-establishing.")
     ap.add_argument("--audit", choices=["once", "always", "never"], default="once",
                     help="Lookahead audit: once (default, when strategy.py changed), "
                          "always (every iter), never (skip — only for trusted strategies).")
@@ -553,6 +574,7 @@ def main() -> None:
         tf=args.tf,
         walk_windows=args.walk,
         embargo=args.embargo,
+        cost_model=args.cost_model,
         dd_penalty=args.dd_penalty,
         min_trades=args.min_trades,
         epsilon=args.epsilon,

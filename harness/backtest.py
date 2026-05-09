@@ -23,7 +23,7 @@ import vectorbt as vbt
 
 from datafeed.loader import load_many
 from harness import metrics as M
-from harness.costs import DEFAULT as DEFAULT_COSTS
+from harness.costs import DEFAULT as DEFAULT_COSTS, build_slippage_matrix
 from harness.funding import adjust_equity, funding_cashflows
 from harness.splits import Split, train_oos, walk_forward
 
@@ -75,20 +75,25 @@ def _positions_to_wide(signals: pd.DataFrame, symbols: list[str],
 
 
 def _run_vectorbt(prices: pd.DataFrame, target_pos: pd.DataFrame,
-                  costs=DEFAULT_COSTS, init_cash: float = 10_000.0):
+                  costs=DEFAULT_COSTS, init_cash: float = 10_000.0,
+                  volumes: pd.DataFrame | None = None):
     """Run a vectorbt portfolio from target position weights.
 
     `target_pos` columns must match `prices` columns. Equal-weight sizing across
     symbols (each column gets `init_cash / n_symbols` notional × position).
+
+    Slippage is built via ``build_slippage_matrix``: scalar in static
+    mode (vectorbt fast path) or per-bar DataFrame in dynamic mode.
     """
     n = prices.shape[1]
     size = target_pos / n  # share of total equity per symbol
+    slippage = build_slippage_matrix(prices, volumes, target_pos, init_cash, costs)
     pf = vbt.Portfolio.from_orders(
         close=prices,
         size=size,
         size_type="targetpercent",
         fees=costs.taker_fee,
-        slippage=costs.slippage_bps * 1e-4,
+        slippage=slippage,
         init_cash=init_cash,
         cash_sharing=True,
         group_by=True,
@@ -117,6 +122,11 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     raw_prices = raw_prices.dropna(how="all")
     symbols_present = list(raw_prices.columns)
 
+    # Volume matrix — only used by dynamic-slippage size impact; harmless
+    # to construct unconditionally (a few MB on the largest universe).
+    raw_volumes = pd.concat({s: df["volume"] for s, df in data.items()}, axis=1)
+    raw_volumes = raw_volumes.reindex_like(raw_prices)
+
     # Bounded forward-fill: tolerate gaps up to ~24h, but treat anything
     # longer as a delisting / data outage. Past that horizon we force the
     # target position to 0 (clean exit at last known price). Without this
@@ -134,7 +144,7 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     # price and prevents re-entry while data is still missing.
     target = target.where(~stale_mask.reindex_like(target).fillna(False), 0.0)
 
-    pf = _run_vectorbt(prices, target, costs=costs)
+    pf = _run_vectorbt(prices, target, costs=costs, volumes=raw_volumes)
 
     try:
         trade_records = pf.trades.records_readable
@@ -231,7 +241,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
         symbols: list[str] | None = None, tf: str = "1h",
         params: dict | None = None, walk_windows: int = 0,
         return_curves: bool = False,
-        embargo: str | pd.Timedelta | None = None) -> dict:
+        embargo: str | pd.Timedelta | None = None,
+        costs=None) -> dict:
     """Top-level: train/OOS split (and optionally walk-forward), return aggregated metrics.
 
     ``embargo`` injects a gap between train and OOS in every split (single
@@ -246,9 +257,12 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
         p.update(params)
     if symbols is None:
         symbols = getattr(mod, "DEFAULT_SYMBOLS", ["BTCUSDT"])
+    if costs is None:
+        costs = DEFAULT_COSTS
 
     main_split = train_oos(period_start, period_end, embargo=embargo)
-    main = run_split(mod, p, symbols, main_split, tf=tf, return_curves=return_curves)
+    main = run_split(mod, p, symbols, main_split, tf=tf, costs=costs,
+                     return_curves=return_curves)
 
     curves = None
     if return_curves and "equity" in main:
@@ -281,7 +295,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
             print(f"[wf] window {i+1}/{len(wf_splits)} "
                   f"({sp.train_start.date()} -> {sp.oos_end.date()}) running...",
                   flush=True)
-            w = run_split(mod, p, symbols, sp, tf=tf, return_curves=return_curves)
+            w = run_split(mod, p, symbols, sp, tf=tf, costs=costs,
+                          return_curves=return_curves)
             oos_sh = (w.get("oos") or {}).get("sharpe", 0.0)
             print(f"[wf] window {i+1}/{len(wf_splits)} done -- OOS Sharpe {oos_sh:+.3f}",
                   flush=True)
@@ -320,6 +335,11 @@ def main() -> None:
                     help="Gap between train and OOS in each split, parseable "
                          "as pd.Timedelta (e.g. '1D', '12h', '144min'). "
                          "Default: no embargo. See harness/splits.py.")
+    ap.add_argument("--cost-model", choices=["static", "spread", "full"],
+                    default="static",
+                    help="static (default) = legacy flat slippage. "
+                         "spread = per-bar half-spread from saved estimates. "
+                         "full = spread + size-impact. See harness/costs.py.")
     args = ap.parse_args()
 
     if args.period:
@@ -336,8 +356,16 @@ def main() -> None:
         mod = load_strategy(Path(args.strategy_dir))
         tf = getattr(mod, "DEFAULT_TF", "1h")
 
+    from harness.costs import CostModel
+    cost_kwargs = {
+        "static": {},
+        "spread": {"use_dynamic_spread": True},
+        "full": {"use_dynamic_spread": True, "use_dynamic_slippage": True},
+    }[args.cost_model]
+    costs = CostModel(**cost_kwargs)
+
     res = run(args.strategy_dir, ps, pe, symbols=args.symbols, tf=tf,
-              walk_windows=args.walk, embargo=args.embargo)
+              walk_windows=args.walk, embargo=args.embargo, costs=costs)
     print(json.dumps(res, indent=2, default=str))
 
 

@@ -1,4 +1,9 @@
-"""Per-symbol bid-ask spread estimation from 1m close prices.
+"""Per-symbol bid-ask spread estimation and loading.
+
+Two responsibilities:
+  - Estimation (Roll + HL-proxy fallback) from 1m OHLCV.
+  - Loading the saved per-symbol-per-month spread parquets back for use
+    in cost modeling (harness/costs.py).
 
 Bybit's klines API does not expose bid-ask spread, but it can be
 estimated from close-to-close serial covariance (Roll, 1984):
@@ -32,8 +37,12 @@ References:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+from datafeed.loader import data_root
 
 
 # A pragmatic floor: the cheapest perp pairs (BTC, ETH) on Bybit clear
@@ -133,6 +142,65 @@ def estimate_spread_series(df_1m: pd.DataFrame, bucket: str = "1h") -> pd.DataFr
             "fallback_used": bool(fallback),
         })
     return pd.DataFrame(rows)
+
+
+def _spread_root() -> Path:
+    return data_root() / "meta" / "spreads"
+
+
+def _months_between(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[int, int]]:
+    out = []
+    y, m = start.year, start.month
+    while (y, m) <= (end.year, end.month):
+        out.append((y, m))
+        m += 1
+        if m == 13:
+            m, y = 1, y + 1
+    return out
+
+
+def load_spread_series(symbol: str, start: pd.Timestamp | str,
+                       end: pd.Timestamp | str) -> pd.DataFrame:
+    """Load saved hourly spread series for a symbol over [start, end).
+
+    Returns a DataFrame indexed by tz-aware UTC `bucket_start` with
+    columns [spread_bps, n_bars, fallback_used]. Empty DataFrame if no
+    estimates exist for the symbol (caller must handle — typically by
+    falling back to ``CostModel.slippage_bps`` flat).
+    """
+    start = pd.Timestamp(start)
+    end = pd.Timestamp(end)
+    start = start.tz_convert("UTC") if start.tzinfo else start.tz_localize("UTC")
+    end = end.tz_convert("UTC") if end.tzinfo else end.tz_localize("UTC")
+    root = _spread_root()
+    parts = []
+    for y, m in _months_between(start, end):
+        p = root / symbol / f"{y:04d}-{m:02d}.parquet"
+        if p.exists():
+            parts.append(pd.read_parquet(p))
+    if not parts:
+        return pd.DataFrame(columns=["spread_bps", "n_bars", "fallback_used"])
+    df = pd.concat(parts, ignore_index=True)
+    df["bucket_start"] = pd.to_datetime(df["bucket_start"], utc=True)
+    df = df.set_index("bucket_start").sort_index()
+    df = df[(df.index >= start) & (df.index < end)]
+    return df
+
+
+def reindex_spreads_to_bars(spread_df: pd.DataFrame,
+                            bar_index: pd.DatetimeIndex,
+                            fallback_bps: float = 1.0) -> pd.Series:
+    """Project hourly spread estimates onto the strategy's bar grid.
+
+    Hourly buckets → ffilled to the bar grid. Bars before the first
+    bucket get ``fallback_bps``. Returns a Series indexed by bar_index
+    with values in **bps** (NOT fractional).
+    """
+    if spread_df.empty:
+        return pd.Series(fallback_bps, index=bar_index)
+    s = spread_df["spread_bps"].reindex(bar_index, method="ffill")
+    s = s.fillna(fallback_bps)
+    return s
 
 
 def summarize(spread_df: pd.DataFrame) -> dict:

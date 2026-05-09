@@ -230,8 +230,15 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
 def run(strategy_dir: str | Path, period_start: str, period_end: str,
         symbols: list[str] | None = None, tf: str = "1h",
         params: dict | None = None, walk_windows: int = 0,
-        return_curves: bool = False) -> dict:
-    """Top-level: train/OOS split (and optionally walk-forward), return aggregated metrics."""
+        return_curves: bool = False,
+        embargo: str | pd.Timedelta | None = None) -> dict:
+    """Top-level: train/OOS split (and optionally walk-forward), return aggregated metrics.
+
+    ``embargo`` injects a gap between train and OOS in every split (single
+    and walk-forward). Accepts ``pd.Timedelta`` or any string parseable by
+    it ("1d", "12h", "144min"). ``None`` / 0 = no embargo (legacy behavior).
+    See ``harness/splits.py`` for rationale.
+    """
     strategy_dir = Path(strategy_dir)
     mod = load_strategy(strategy_dir)
     p = dict(mod.DEFAULT_PARAMS)
@@ -240,7 +247,7 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
     if symbols is None:
         symbols = getattr(mod, "DEFAULT_SYMBOLS", ["BTCUSDT"])
 
-    main_split = train_oos(period_start, period_end)
+    main_split = train_oos(period_start, period_end, embargo=embargo)
     main = run_split(mod, p, symbols, main_split, tf=tf, return_curves=return_curves)
 
     curves = None
@@ -268,7 +275,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
     if walk_windows > 1:
         windows = []
         wf_curves: list[dict] = []
-        wf_splits = walk_forward(period_start, period_end, n_windows=walk_windows)
+        wf_splits = walk_forward(period_start, period_end, n_windows=walk_windows,
+                                 embargo=embargo)
         for i, sp in enumerate(wf_splits):
             print(f"[wf] window {i+1}/{len(wf_splits)} "
                   f"({sp.train_start.date()} -> {sp.oos_end.date()}) running...",
@@ -308,6 +316,10 @@ def main() -> None:
                     help="If omitted, read strategy.py:DEFAULT_TF, fall back to '1h'.")
     ap.add_argument("--symbols", nargs="*")
     ap.add_argument("--walk", type=int, default=0)
+    ap.add_argument("--embargo", default=None,
+                    help="Gap between train and OOS in each split, parseable "
+                         "as pd.Timedelta (e.g. '1D', '12h', '144min'). "
+                         "Default: no embargo. See harness/splits.py.")
     args = ap.parse_args()
 
     if args.period:
@@ -325,7 +337,7 @@ def main() -> None:
         tf = getattr(mod, "DEFAULT_TF", "1h")
 
     res = run(args.strategy_dir, ps, pe, symbols=args.symbols, tf=tf,
-              walk_windows=args.walk)
+              walk_windows=args.walk, embargo=args.embargo)
     print(json.dumps(res, indent=2, default=str))
 
 

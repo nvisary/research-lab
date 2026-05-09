@@ -51,6 +51,11 @@ class IterationConfig:
     # CLI --tf or programmatic override forces a specific value regardless.
     tf: str | None = None
     walk_windows: int = 4   # 4 walk-forward windows ~5mo each on the default period
+    # Embargo between train and OOS in each split. Default 1d:
+    # at 1h TF this is 24 bars, covering most strategies' rolling-indicator
+    # lookbacks; at 5m TF it's 288 bars (covers a 200-bar SMA). Set to "0"
+    # to disable. See harness/splits.py for the rationale.
+    embargo: str = "1D"
     stability_penalty: float = 0.5
     dd_penalty: float = 0.5
     min_trades: int = 50
@@ -251,6 +256,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
     try:
         result = bt.run(strategy_dir, cfg.period_start, cfg.period_end,
                         tf=cfg.tf, walk_windows=cfg.walk_windows,
+                        embargo=cfg.embargo,
                         return_curves=True)
     except Exception as e:
         error = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=3)}"
@@ -525,6 +531,11 @@ def main() -> None:
                          "fall back to '1h'.")
     ap.add_argument("--walk", type=int, default=4,
                     help="Number of walk-forward windows (1 == single train/OOS split).")
+    ap.add_argument("--embargo", default="1D",
+                    help="Gap between train and OOS in each split, parseable "
+                         "as pd.Timedelta (e.g. '1D', '12h', '144min'). "
+                         "Default: 1D. Set to '0' to disable. "
+                         "See harness/splits.py for the rationale.")
     ap.add_argument("--audit", choices=["once", "always", "never"], default="once",
                     help="Lookahead audit: once (default, when strategy.py changed), "
                          "always (every iter), never (skip — only for trusted strategies).")
@@ -541,6 +552,7 @@ def main() -> None:
         period_end=args.end,
         tf=args.tf,
         walk_windows=args.walk,
+        embargo=args.embargo,
         dd_penalty=args.dd_penalty,
         min_trades=args.min_trades,
         epsilon=args.epsilon,

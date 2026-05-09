@@ -287,7 +287,7 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     # multi-symbol strategies see the equal-weighted basket's b&h Sharpe.
     bench = (prices / prices.iloc[0]).mean(axis=1) * float(adj_equity_full.iloc[0])
 
-    out = {}
+    out: dict = {}
     for label, lo, hi in [("train", split.train_start, split.train_end),
                            ("oos", split.oos_start, split.oos_end)]:
         mask = (adj_equity_full.index >= lo) & (adj_equity_full.index < hi)
@@ -304,6 +304,16 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         out[label] = M.summary(equity, rets, positions, n_trades=n_trades, tf=tf,
                                 benchmark=bench[mask],
                                 trades_in_slice=slice_trades)
+
+    # Derived: train→OOS Sharpe gap. Overfitting indicator: > 1.0 is
+    # a strong signal that the strategy fit the training period rather
+    # than generalised. Stored on the OOS dict because that's where
+    # readers look when assessing edge quality.
+    try:
+        sg = float(out["train"].get("sharpe", 0.0)) - float(out["oos"].get("sharpe", 0.0))
+        out["oos"]["sharpe_gap"] = sg
+    except Exception:
+        out["oos"]["sharpe_gap"] = None
 
     if return_curves:
         out["equity"] = adj_equity_full

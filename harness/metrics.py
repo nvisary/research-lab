@@ -118,6 +118,145 @@ def hit_rate(returns: pd.Series) -> float:
     return float((r > 0).mean())
 
 
+def _longest_true_run(arr: np.ndarray) -> int:
+    """Length of the longest contiguous True run in a boolean array."""
+    if len(arr) == 0:
+        return 0
+    best = cur = 0
+    for v in arr:
+        if v:
+            cur += 1
+            if cur > best:
+                best = cur
+        else:
+            cur = 0
+    return int(best)
+
+
+def quality_metrics(equity: pd.Series, returns: pd.Series,
+                    positions: pd.DataFrame | None,
+                    trades_in_slice: pd.DataFrame | None,
+                    tf: str | None = None) -> dict:
+    """Strategy-quality / problem-detection metrics.
+
+    Each ticks a specific class of failure that raw Sharpe + max_dd hide:
+      - pct_positive_months    consistency vs lucky-streak
+      - longest_underwater_*   pain duration / recovery time
+      - pnl_concentration_*    edge dependence on a few outliers
+      - tail_ratio             skew of bar-level returns
+      - pain_index             severity-over-time (Ulcer-style)
+      - pct_time_in_position   does it actually trade or sit in cash
+      - avg/median_trade_duration_hours
+      - skew / kurt            distribution shape (PSR uses these but UI wants them)
+
+    Designed to gracefully degrade: empty inputs return Nones, never raise.
+    """
+    out: dict = {
+        "pct_positive_months": None,
+        "longest_underwater_bars": None,
+        "longest_underwater_days": None,
+        "pnl_concentration_top5_pct": None,
+        "pnl_concentration_top1_pct": None,
+        "tail_ratio": None,
+        "pain_index": None,
+        "pct_time_in_position": None,
+        "avg_trade_duration_hours": None,
+        "median_trade_duration_hours": None,
+        "skew": None,
+        "kurt": None,
+    }
+    # ---- Monthly consistency ----
+    if equity is not None and len(equity) >= 2:
+        try:
+            monthly_eq = equity.resample("MS").last().dropna()
+            if len(monthly_eq) >= 2:
+                m_ret = monthly_eq.pct_change().dropna()
+                if len(m_ret) >= 1:
+                    out["pct_positive_months"] = float((m_ret > 0).mean() * 100.0)
+        except Exception:
+            pass
+
+    # ---- Longest underwater run ----
+    if equity is not None and len(equity) >= 2:
+        peak = equity.cummax()
+        under = (equity < peak).values
+        run_bars = _longest_true_run(under)
+        out["longest_underwater_bars"] = run_bars
+        # Convert to calendar days using TF if known.
+        bars_per_day = TF_PERIODS_PER_YEAR.get(tf, 0) / 365.25 if tf else 0
+        if bars_per_day > 0:
+            out["longest_underwater_days"] = float(run_bars / bars_per_day)
+
+    # ---- Pain index (Ulcer) ----
+    if equity is not None and len(equity) >= 2:
+        peak = equity.cummax()
+        dd_frac = (equity / peak - 1.0).clip(upper=0.0)  # negative or zero
+        out["pain_index"] = float(np.sqrt((dd_frac ** 2).mean()))
+
+    # ---- Trade-PnL concentration ----
+    if trades_in_slice is not None and not trades_in_slice.empty \
+            and "pnl_quote" in trades_in_slice.columns:
+        pnl = trades_in_slice["pnl_quote"].dropna()
+        if not pnl.empty:
+            total = float(pnl.sum())
+            if abs(total) > 1e-9:
+                # Top-N positive contributions / |total|. We use abs(total) so
+                # losing strategies' "concentration" still reads meaningfully
+                # (a -10% strategy where one trade made +5% is concentrated).
+                pos = pnl[pnl > 0].sort_values(ascending=False)
+                if len(pos) >= 1:
+                    out["pnl_concentration_top1_pct"] = float(
+                        pos.iloc[0] / abs(total) * 100.0
+                    )
+                if len(pos) >= 5:
+                    out["pnl_concentration_top5_pct"] = float(
+                        pos.iloc[:5].sum() / abs(total) * 100.0
+                    )
+                else:
+                    out["pnl_concentration_top5_pct"] = float(
+                        pos.sum() / abs(total) * 100.0
+                    )
+
+    # ---- Trade durations ----
+    if trades_in_slice is not None and not trades_in_slice.empty \
+            and "duration_hours" in trades_in_slice.columns:
+        dh = trades_in_slice["duration_hours"].dropna()
+        if not dh.empty:
+            out["avg_trade_duration_hours"] = float(dh.mean())
+            out["median_trade_duration_hours"] = float(dh.median())
+
+    # ---- Tail ratio ----
+    if returns is not None and len(returns.dropna()) >= 50:
+        r = returns.dropna()
+        # Top/bottom decile of returns. Take abs of mean so the ratio is
+        # always comparable; <1 means losses dwarf gains in the tails.
+        top = r.quantile(0.9)
+        bot = r.quantile(0.1)
+        top_mean = r[r >= top].mean()
+        bot_mean = abs(r[r <= bot].mean())
+        if bot_mean > 1e-12:
+            out["tail_ratio"] = float(top_mean / bot_mean)
+
+    # ---- % time in position ----
+    if positions is not None and not positions.empty:
+        try:
+            in_pos = (positions != 0).any(axis=1)
+            out["pct_time_in_position"] = float(in_pos.mean() * 100.0)
+        except Exception:
+            pass
+
+    # ---- Skew / kurt ----
+    if returns is not None and len(returns.dropna()) >= 30:
+        r = returns.dropna()
+        try:
+            out["skew"] = float(r.skew())
+            out["kurt"] = float(r.kurt())
+        except Exception:
+            pass
+
+    return out
+
+
 def capacity_metrics(trades_in_slice: pd.DataFrame,
                      warn_threshold_pct: float = 5.0) -> dict:
     """Trade-size-vs-volume capacity diagnostics.
@@ -171,6 +310,7 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
     if benchmark is not None and len(benchmark.dropna()) > 1:
         bench_sh = float(sharpe(benchmark.pct_change(), tf=tf))
     cap = capacity_metrics(trades_in_slice)
+    qual = quality_metrics(equity, returns, positions, trades_in_slice, tf=tf)
     return {
         "sharpe": sh,
         "bench_sharpe": bench_sh,
@@ -188,6 +328,7 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
         "sharpe_ci_lo": float(ci_lo),
         "sharpe_ci_hi": float(ci_hi),
         **cap,
+        **qual,
     }
 
 
@@ -260,6 +401,31 @@ def aggregate_wf_composite(window_metrics: list[dict],
     mean_parts = [m.get("mean_participation_pct") for m in window_metrics]
     mean_parts_clean = [p for p in mean_parts if p is not None]
     n_over = sum(int(m.get("n_trades_over_threshold", 0) or 0) for m in window_metrics)
+    # Quality / problem-detection aggregates. Each metric uses the
+    # appropriate summary across windows: worst-case (max) for pain
+    # indicators, mean for distribution properties, max for
+    # concentration. None values are skipped.
+    def _agg(key: str, fn):
+        vals = [m.get(key) for m in window_metrics]
+        clean = [v for v in vals if v is not None]
+        return float(fn(clean)) if clean else None
+
+    qual_agg = {
+        "mean_pct_positive_months": _agg("pct_positive_months", np.mean),
+        "worst_longest_underwater_bars": _agg("longest_underwater_bars", np.max),
+        "worst_longest_underwater_days": _agg("longest_underwater_days", np.max),
+        "worst_pnl_concentration_top5_pct": _agg("pnl_concentration_top5_pct", np.max),
+        "worst_pnl_concentration_top1_pct": _agg("pnl_concentration_top1_pct", np.max),
+        "mean_tail_ratio": _agg("tail_ratio", np.mean),
+        "worst_pain_index": _agg("pain_index", np.max),
+        "mean_pct_time_in_position": _agg("pct_time_in_position", np.mean),
+        "mean_avg_trade_duration_hours": _agg("avg_trade_duration_hours", np.mean),
+        "mean_skew": _agg("skew", np.mean),
+        "mean_kurt": _agg("kurt", np.mean),
+        # Sharpe gap: max across windows (worst-case overfit signal).
+        "worst_sharpe_gap": _agg("sharpe_gap", np.max),
+        "mean_sharpe_gap": _agg("sharpe_gap", np.mean),
+    }
     cagrs = [m.get("cagr", 0.0) for m in window_metrics]
     total_returns = [m.get("total_return", 0.0) for m in window_metrics]
     bench_sharpes = [m.get("bench_sharpe") for m in window_metrics]
@@ -287,4 +453,5 @@ def aggregate_wf_composite(window_metrics: list[dict],
         "mean_participation_pct": (float(np.mean(mean_parts_clean))
                                    if mean_parts_clean else None),
         "n_trades_over_threshold": int(n_over),
+        **qual_agg,
     }

@@ -20,25 +20,27 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-DESCRIPTION = (
-    "Cross-sectional momentum. Each 1d bar, ranks the 10-major basket "
-    "by 60-day trailing return; longs the top 30% (recent winners, "
-    "expected to keep winning) and shorts the bottom 30%. Classic "
-    "Jegadeesh-Titman momentum factor on crypto majors — fires on "
-    "RELATIVE strength dispersion, market-direction-neutral."
-)
-
 DEFAULT_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",
+    "DOTUSDT", "TRXUSDT", "BCHUSDT", "ETCUSDT", "NEARUSDT",
+    "ATOMUSDT", "FILUSDT", "ICPUSDT", "UNIUSDT", "OPUSDT",
+    "INJUSDT", "ARUSDT", "SUIUSDT", "TIAUSDT", "SEIUSDT",
+    "HBARUSDT", "GRTUSDT", "IMXUSDT", "MNTUSDT", "RUNEUSDT",
+    "ENSUSDT", "LDOUSDT", "GALAUSDT", "AXSUSDT", "BLURUSDT",
+    "ORDIUSDT", "SANDUSDT", "THETAUSDT", "TONUSDT", "WLDUSDT",
+    "XLMUSDT", "XMRUSDT", "NEOUSDT", "KASUSDT", "EGLDUSDT",
 ]
 DEFAULT_TF = "1d"
 
 DEFAULT_PARAMS = {
-    "lookback": 60,         # days of trailing return for ranking
-    "long_quantile": 0.3,   # long top 30%
-    "short_quantile": 0.3,  # short bottom 30%
+    "lookback": 30,
+    "long_quantile": 0.3,
+    "short_quantile": 0.3,
     "long_only": 0,
+    "hold_days": 1,
+    "vol_target": 1,
+    "vol_window": 30,
 }
 
 PARAM_SPACE = {
@@ -46,6 +48,9 @@ PARAM_SPACE = {
     "long_quantile": (0.1, 0.5),
     "short_quantile": (0.1, 0.5),
     "long_only": (0, 1),
+    "hold_days": (1, 30),
+    "vol_target": (0, 1),
+    "vol_window": (10, 60),
 }
 
 
@@ -73,6 +78,29 @@ def generate_signals(data: dict[str, pd.DataFrame], params: dict) -> pd.DataFram
         pos = pos.where(~(pct_rank <= short_q), -1.0)
 
     pos = pos.where(rets.notna(), 0.0)
+
+    # C1: vol-target per leg — weight ∝ 1/sigma_i
+    vol_target = bool(int(params.get("vol_target", 0)))
+    vol_window = int(params.get("vol_window", 30))
+    if vol_target and vol_window >= 5:
+        daily = closes.pct_change()
+        sigma = daily.rolling(vol_window, min_periods=vol_window // 2).std()
+        sigma = sigma.replace(0, np.nan)
+        inv_vol = 1.0 / sigma
+        signed_w = pos.mul(inv_vol).where(pos != 0, 0.0)
+        active = (pos != 0).sum(axis=1)
+        gross = signed_w.abs().sum(axis=1).replace(0, np.nan)
+        scale = active / gross
+        pos = signed_w.mul(scale, axis=0).fillna(0.0)
+
+    # A4: holding period
+    hold_days = int(params.get("hold_days", 1))
+    if hold_days > 1:
+        idx = np.arange(len(pos))
+        keep_mask = (idx % hold_days) == 0
+        held = pos.where(pd.Series(keep_mask, index=pos.index), other=np.nan)
+        pos = held.ffill().fillna(0.0)
+
     pos = pos.shift(1).fillna(0.0)
 
     pos.index.name = "timestamp"

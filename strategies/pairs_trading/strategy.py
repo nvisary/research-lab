@@ -41,10 +41,10 @@ RAW_SIZING = True
 MAX_POSITION = 1.0
 
 DEFAULT_PARAMS = {
-    "zwindow": 168,    # rolling window for spread mean/std (1 week of 1h bars)
-    "z_thresh": 2.0,   # |z| > z_thresh required to enter
-    "z_exit": 0.0,     # exit when z crosses this level toward zero
-    "leg_size": 0.5,   # fraction of equity per leg
+    "zwindow": 168,
+    "z_thresh": 3.0,
+    "z_exit": 1.0,     # iter15: earlier exit (was 0.5)
+    "leg_size": 0.5,
 }
 
 PARAM_SPACE = {

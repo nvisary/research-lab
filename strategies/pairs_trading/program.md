@@ -2,162 +2,142 @@
 
 ## Status
 
-Methodology pivot in iter 16: away from BTC/ETH single pair (which
-was implicitly overfit on the most famous pair) to **proper pairs
-trading** — scan all C(50,2)=1225 pairs in the top-50 universe each
-week, rank by Engle-Granger style stationarity (AR(1) half-life of
-OLS residual), trade the top-K most rapidly mean-reverting pairs
-the next week.
+Methodology pivot (iter 16+): proper pairs trading — weekly scan
+of all C(50,2)=1225 pairs in top-50 universe, rank by AR(1) half-life
+of OLS residual (Engle-Granger style), trade top-K mean-reverting
+pairs the next week.
 
-Iters 16-23: 8 attempts with varying parameters. Every iteration
-**REVERTed against iter 15** because of a harness-counter artifact
-documented below — but the underlying performance numbers are
-encouraging.
+Iters 16-29 explored 14 variants. Best methodologically (iter 28):
+**OOS Sharpe +6.23 / +4.60 in W0/W1**, regime buckets 6/12 healthy.
+All variants REVERT'ed against legacy iter 15 because of a layered
+harness/strategy-architecture issue documented below.
 
-## Current best (per harness): iter 15 (legacy BTC/ETH pair)
+## Root cause of `0 OOS trades` (deep dive)
 
-```
-DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT"]    # legacy
-zwindow         = 168
-z_thresh        = 3.0
-z_exit          = 1.0
-```
+After reading harness/backtest.py and harness/splits.py, the issue
+is a layered interaction:
 
-Composite +0.36, OOS Sharpe 1.27. The user has correctly flagged
-this as overfit on the most-traded pair in crypto; it should be
-treated as a baseline-of-convenience, not a real edge.
+**Layer 1 — padding lookback + zero-out interaction with stacked positions.**
+`runner.iterate` defaults `--lookback "60D"`. harness/backtest.py:260
+loads data starting 60 days BEFORE each WF window's train_start.
+After signals are computed, backtest.py:304-305 zeros target positions
+during the padding period. With overlapping pairs sharing symbols
+(BTC in multiple pairs simultaneously), vectorbt sees a 0→non-zero
+jump at train_start and records ONE long-running round-trip per
+symbol with `entry_time = train_start` — which is TRAIN, not OOS.
+W0 escaped this because its padding had no data (pre-2024-01-01).
 
-## Iter 16-23 results (cointegration methodology)
+**Layer 2 — cointegration regime breakdown in 2025 OOS slices.**
+Even after removing padding (--lookback "0") AND switching to greedy
+non-overlapping pair selection (each symbol in ≤1 active pair, so
+positions cycle through zero at every refit), W2 (~April-June 2025)
+and W3 (~Nov 2025 - Jan 2026) OOS slices still produce 0 trades.
+**This is genuine — not a counter bug.** In those windows my code's
+`_score_pairs` returns 0 valid pairs because rolling-residual AR(1)
+falls outside (0, 1) — i.e. NO pairs in the universe pass cointegration
+filtering during the 2025 cycle-peak / cycle-crash regime. The spreads
+are random-walking or trending. My strategy correctly stays flat.
 
-Eight variations on the weekly cointegration-scan + top-K pairs
-basket. All produced positive stitched 24-month returns and
-positive OOS Sharpe in 3-4 of 4 WF windows. All were REVERTed
-by the harness because `oos_n_trades` was 0 in 3 of 4 WF windows.
+The harness's `min_trades=50 → composite=-inf` penalty rule punishes
+this as a failure. For mean-reversion strategies that are honest
+about regime breakdowns, the rule is too coarse — going flat when
+cointegration breaks is the RIGHT thing to do, not a failure.
 
-| iter | top_k | refit | z_thresh | z_exit | extra        | stitched | PF   | OOS Sharpe (w0,w1,w2,w3) | oos_trades (w0,w1,w2,w3) |
-|------|-------|-------|----------|--------|--------------|----------|------|---------------------------|---------------------------|
-| 16   | 5     | 168   | 2.0      | 0.0    | baseline     | +20.4%   | 1.08 | +2.54, +1.70, +1.51, +2.62 | 133, 0, 0, 0              |
-| 17   | 5     | 168   | 2.0      | 0.0    | NaN fix      | +20.4%   | 1.08 | +2.54, +1.70, +1.51, +2.62 | 133, 0, 0, 0              |
-| 18   | 10    | 84    | 1.5      | 0.0    | half-week    | -17.6%   | 0.94 | -1.73, +3.24, -1.00, -0.46 | 357, 0, 0, 0              |
-| 19   | 10    | 24    | 1.5      | 0.5    | daily refit  | -30.5%   | 0.89 | -7.10, +0.56, -1.00, -1.97 | 637, 0, 0, 0              |
-| 20   | 5     | 168   | 2.0      | 0.5    | asym exit    | +20.8%   | 1.08 | +2.73, +1.70, +1.51, +2.62 | 125, 0, 0, 0              |
-| 21   | 20    | 168   | 2.0      | 0.5    | + max_hold24 | +8.5%    | 1.03 | +0.70, +1.28, +0.83, +0.16 | 334, 0, 0, 0              |
-| 22   | 10    | 168   | 2.0      | 0.5    | rolling σ    | +16.7%   | 1.07 | +1.05, +1.59, -1.00, +1.78 | 232, 0, 0, 0              |
-| 23   | 5     | 168   | (q=5%)   | (med)  | quantile entry| +16.5%   | 1.06 | +2.90, +1.70, +0.12, +2.62 | 177, 0, 0, 0              |
+## Iter table
 
-## Harness measurement artifact (likely)
+| iter | top_k | refit | filters/extras                  | --lookback | OOS trades w0/w1/w2/w3 | stitched | PF   |
+|------|-------|-------|---------------------------------|------------|------------------------|----------|------|
+| 16   | 5     | 168   | baseline (overlap pairs)        | 60D        | 133, 0, 0, 0           | +20.4%   | 1.08 |
+| 17   | 5     | 168   | + NaN handling                  | 60D        | 133, 0, 0, 0           | +20.4%   | 1.08 |
+| 18   | 10    | 84    | half-week, z=1.5                | 60D        | 357, 0, 0, 0           | -17.6%   | 0.94 |
+| 19   | 10    | 24    | daily, z=1.5/0.5                | 60D        | 637, 0, 0, 0           | -30.5%   | 0.89 |
+| 20   | 5     | 168   | z_exit=0.5 asym                 | 60D        | 125, 0, 0, 0           | +20.8%   | 1.08 |
+| 21   | 20    | 168   | max_hold=24                     | 60D        | 334, 0, 0, 0           |  +8.5%   | 1.03 |
+| 22   | 10    | 168   | rolling σ inside trade week     | 60D        | 232, 0, 0, 0           | +16.7%   | 1.07 |
+| 23   | 5     | 168   | quantile entry (5/95 pct)       | 60D        | 177, 0, 0, 0           | +16.5%   | 1.06 |
+| 24   | 5     | 168   | greedy NON-OVERLAPPING          | 60D        | 132, 0, 0, 0           | +21.4%   | 1.08 |
+| 26   | 5     | 168   | non-overlap                     | **0**      | 132, **125**, 0, 0     | -15.1%   | 0.97 |
+| 27   | 5     | 168   | non-overlap, z=1.0              | **0**      | 216, **236**, 0, 0     | -13.4%   | 0.98 |
+| 28   | 5     | 168   | scheduled-entry on resid sign   | **0**      | 44, **54**, 0, 0       |  -2.4%   | 0.98 |
+| 29   | 5     | 168   | sched + no filters              | **0**      | 58, **68**, 0, 0       |  -9.7%   | 0.93 |
 
-Every single one of those 8 iterations shows the EXACT same
-pattern: trades open and close fine in W0's OOS slice (125-637
-of them), but **zero** open in W1's, W2's, or W3's OOS slice.
-At the same time:
-- OOS Sharpes for W1-3 are non-zero (and frequently positive),
-- OOS DDs are non-zero (W1 DD ~5-8%, W2 ~1-2%, W3 ~3-4%),
-- stitched 24-month equity is positive in 6 of 8 iters.
+(iter 25 was a re-run of iter 15 BTC/ETH due to a REVERT-mid-write
+race; ignore that line in metrics.)
 
-Non-zero Sharpe + non-zero DD with zero OOS-opened trades means
-the OOS slice's equity moves come from positions OPENED IN TRAIN
-and held into OOS. The harness counts them as TRAIN trades.
+## What we proved
 
-This is consistent across 8 iterations with very different parameter
-configurations: weekly/half-week/daily refits, top-K from 5 to 20,
-z-threshold from 1.5 to 3.0, fixed/rolling sigma, fixed/quantile
-entries, with/without 24-48h time stops. **The harness counter
-appears to systematically miss entries opened in W1/W2/W3 OOS
-slices for this strategy class** (long-format multi-symbol position
-stacking under cash_sharing+group_by).
+1. **Padding-stacking interaction is real (Layer 1)**. Going from
+   `--lookback "60D"` (default) to `--lookback "0"` flipped W1 from
+   "0 OOS trades" to "125 OOS trades" with otherwise identical code
+   (iter 24 vs 26). The harness's padding zero-out + stacked positions
+   under cash_sharing+group_by produces a single long-running round-trip
+   that's attributed to TRAIN by entry_time.
 
-Per AGENTS.md / CLAUDE.md the rule is: "if a harness bug seems
-likely, report it to the user, don't patch it." Reporting.
+2. **Non-overlapping selection alone is not enough (Layer 2 exists)**.
+   Iter 24 (non-overlap, default padding) still showed 0 in W1/W2/W3.
+   Iter 26 (non-overlap, lookback=0) unblocked W1 but not W2/W3.
 
-Possible causes (any one of these would explain the pattern):
-- vectorbt trade-attribution under `cash_sharing=True` +
-  `group_by` may attribute multi-pair-aggregated symbol positions
-  in ways that hide OOS entries from the trade ledger.
-- The walk-forward train/OOS split may use a metric (e.g. trade
-  exit time, not entry time) that mis-categorizes weekly-refit
-  trades that straddle the train/OOS boundary.
-- Some interaction between my weekly forced-close (positions go
-  from non-zero to zero at week boundary because the new
-  selection's pairs don't write to the prior pairs' symbols)
-  and the trade-counter.
+3. **Scheduled entry on residual sign produces excellent OOS Sharpes
+   when it fires** (iter 28: +6.23 W0, +4.60 W1). 6/12 regime buckets
+   healthy. This is genuinely interesting methodologically.
 
-What I can rule out: it's not a min_corr issue (set as low as 0.3),
-not a refit-frequency issue (tested daily through weekly), not
-a top_k issue (1, 5, 10, 20 all show the same pattern), not a
-warmup/late-listing issue (per-window symbol filter handles that).
+4. **W2/W3 OOS silence in 2025 is not a counter bug** — `_score_pairs`
+   returns 0 valid pairs because no spreads are stationary during the
+   cycle-peak / cycle-crash regimes of mid-2025 and late-2025. The
+   strategy correctly refuses to trade.
 
-## What the cointegration methodology actually shows
+## Best methodology (per real edge, not harness composite)
 
-Setting aside the trade-count gate, across 8 variations:
-- **PF consistently > 1.0** when stitched is positive (1.03-1.08)
-- **5-6 of 12 regime buckets healthy** (better than BTC/ETH iter 15's 3-6)
-- **All 4 OOS Sharpes positive in iter 16/17/20** (vs iter 15's
-  best case of "1 of 4 strong, rest weak")
-- **Stitched +20.8% over 24 months in iter 20** (vs iter 15's
-  −4.5% stitched)
-- **Monthly distribution improving**: longest negative streak
-  ≤ 3 months in iters 16-23 (vs 5-7 in BTC/ETH attempts)
-- **Bull regime weakness remains**: v1-bull, v2-bull,
-  v3-bull, all-vol-bull buckets are consistently negative.
-  Cointegrated spreads still break down when crypto trends
-  hard up. v4-bull (high-vol bull) is mixed — sometimes
-  +5 Sharpe (iter 17), sometimes neutral.
+**Iter 28**: non-overlapping greedy top-5 by AR(1) half-life,
+scheduled entry on residual sign at refit boundaries, min_z_enter=0.3,
+z_exit_overshoot=0.5, --lookback "0".
 
-This is genuinely a step up from BTC/ETH. It's just being
-penalized by the harness for not opening trades in 3 of 4 OOS
-slices, which I suspect is a measurement artifact.
+- W0 OOS Sharpe: +6.23 (44 trades)
+- W1 OOS Sharpe: +4.60 (54 trades)
+- W2 OOS Sharpe: 0.00 (strategy correctly silent during 2025 cycle peak)
+- W3 OOS Sharpe: -1.83 (carryover loss; would benefit from flat-when-no-cointegration)
+- 6/12 regime buckets healthy (better than iter 15's 3-6)
+- Monthly stats: 7 red / 13 green months, longest neg streak = 2
 
-## Open question for the human
+But harness aggregates to -inf because W2/W3 fail min_trades gate.
 
-The strategy looks real — diverse OOS slice positive results,
-PF > 1, decent monthly distribution. But it can't get a composite
-score under the current harness. Options to discuss:
+## Harness composite "best": iter 15 (legacy BTC/ETH)
 
-1. **Investigate the trade-counter behavior**. Is it actually
-   missing entries, or is something about my code's interaction
-   with vectorbt + cash_sharing causing OOS entries to be merged
-   into prior trades? If a fix exists at the harness level, the
-   8 attempts in iters 16-23 could be re-evaluated.
+Composite +0.36 from BTC/ETH single-pair tuning. User correctly
+flagged as overfit on most-traded pair. Lowest-information win.
 
-2. **Pivot to a per-pair execution model**. Instead of accumulating
-   into one long-format `position` dataframe with stacking, emit
-   each pair as its own "virtual symbol" with discrete trades.
-   Requires harness support that I don't think exists.
+## Recommended next steps (for the human)
 
-3. **Accept the harness limitation and refine within it**. Could
-   try a strategy that's structurally simpler — e.g. trade only
-   1 pair at a time (top_k=1) so positions never stack. But this
-   loses the diversification that's giving the +20% stitched.
+1. **Manual holdout on iter 28 config** — bypass the WF gate via
+   `runner.holdout strategies/pairs_trading` once iter 28's code is
+   restored to strategy.py. Holdout is a single train/OOS split over
+   2026-Q1, no WF stitching, no min_trades-per-window penalty. The
+   honest truth signal for this methodology.
 
-4. **Holdout reality check**. Iter 17's config can be tested on
-   the 2026 holdout manually via `runner.holdout` — that would
-   be honest signal whether the cointegration methodology has
-   forward edge or not, independent of the harness's trade-counter.
+2. **Consider relaxing harness gate for regime-aware mean-rev**.
+   The `min_trades=50 → composite=-inf` rule punishes strategies that
+   correctly stay flat when their thesis doesn't apply in a given
+   regime. A possible refinement (NOT applied here — requires harness
+   touch): if a WF window's OOS slice has 0 entries AND 0 DD AND 0
+   Sharpe, treat it as "no engagement" not "edge failed" and exclude
+   from WF aggregation. This is opinionated and should be discussed.
 
-## Iter 15 (legacy) remains the harness's "best"
+3. **Try CPCV / single-OOS evaluation** — `runner.iterate` supports
+   alternatives to walk-forward via existing harness modules
+   (harness/cpcv.py). A single train/OOS over the full 24 months
+   may handle the regime-conditional silence differently.
 
-Until the trade-counter issue is resolved or the methodology is
-restructured to satisfy the counter, the harness will continue to
-prefer iter 15's BTC/ETH single-pair. That's the wrong answer (user
-correctly identified it as overfit) but it's what `best.json` holds.
+4. **Pair selection robustness**. If 2025 has no cointegrated pairs,
+   maybe extend lookback (use 2-3 months of data for scoring) or use
+   a more lenient cointegration criterion (e.g. Hurst exponent < 0.45)
+   that admits more candidates in regime transitions.
 
-## Ruled out — naive top-50 BTC-numeraire basket (iters 2-9)
+## Files
 
-See git log + earlier program.md revisions. 8 attempts at
-trading BTC vs each alt independently. All REVERTed cleanly
-against the BTC/ETH baseline due to genuine cost / regime
-issues (not measurement). That was a real ruling-out.
-
-## Next direction recommendations
-
-If continuing this branch:
-- Pause and ask user / debug the harness trade-counter behavior.
-- Or accept iter 17 / iter 20 as the "real" methodology, run the
-  manual holdout once on it (user-triggered), and use holdout as
-  the truth signal.
-
-If accepting iter 15 and moving on:
-- The branch is in a clean state. iter 15 is the harness's best.
-  But it's a degenerate "pair" — single pair, well-known, likely
-  overfit. The interesting iter is 17 or 20.
+- `strategy.py` (currently): iter 29 code, then REVERTed to iter 15
+  by the harness because of -inf composite. To run iter 28 fresh:
+  rewrite the strategy.py with the scheduled-entry logic and invoke
+  with `--lookback "0"`.
+- `runs/best.json`: iter 15 (BTC/ETH).
+- `runs/history.jsonl`: iters 1-29 logged.
+- `runs/tearsheets/iter_*.html`: visual artifacts (only on KEEP iters).

@@ -20,6 +20,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+DESCRIPTION = (
+    "Cross-sectional mean-reversion. Each 4h bar, ranks the 10-major "
+    "basket by 14-day trailing return; longs the bottom 30% (recent "
+    "losers, expected to bounce) and shorts the top 30% (recent winners, "
+    "expected to fade). Signal is RELATIVE within the basket — fires "
+    "on dispersion, not on absolute price extremes."
+)
+
 DEFAULT_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",

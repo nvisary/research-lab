@@ -1,5 +1,6 @@
 export type StrategySummary = {
   name: string;
+  description: string | null;
   best_composite: number | null;
   best_iter: number | null;
   n_iters: number;
@@ -74,6 +75,7 @@ export type Best = {
 
 export type StrategyDetail = {
   name: string;
+  description: string | null;
   best: Best;
   history: HistoryRow[];
   program_md: string;

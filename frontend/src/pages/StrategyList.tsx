@@ -42,11 +42,16 @@ export function StrategyList() {
               </tr>
             )}
             {rows?.map((s) => (
-              <tr key={s.name} className="border-t border-edge hover:bg-slate-800/40">
+              <tr key={s.name} className="border-t border-edge hover:bg-slate-800/40 align-top">
                 <td className="px-4 py-2">
                   <Link to={`/strategies/${s.name}`} className="font-semibold text-blue-400">
                     {s.name}
                   </Link>
+                  {s.description && (
+                    <div className="text-xs text-slate-400 mt-1 max-w-xl leading-snug">
+                      {s.description}
+                    </div>
+                  )}
                 </td>
                 <td className="px-4 py-2 mono">{fmt(s.best_composite)}</td>
                 <td className="px-4 py-2">{s.best_iter ?? "—"}</td>

@@ -20,6 +20,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+DESCRIPTION = (
+    "Cross-sectional momentum. Each 1d bar, ranks the 10-major basket "
+    "by 60-day trailing return; longs the top 30% (recent winners, "
+    "expected to keep winning) and shorts the bottom 30%. Classic "
+    "Jegadeesh-Titman momentum factor on crypto majors — fires on "
+    "RELATIVE strength dispersion, market-direction-neutral."
+)
+
 DEFAULT_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",

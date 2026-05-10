@@ -29,6 +29,33 @@ ROOT = Path(__file__).resolve().parents[1]
 STRATS = ROOT / "strategies"
 DIST = ROOT / "frontend" / "dist"
 
+
+def _extract_description(strategy_py: Path) -> str | None:
+    """Read the DESCRIPTION module-level constant from a strategy.py
+    without importing the module. Returns None if absent or unparseable.
+
+    Looks for assignments like ``DESCRIPTION = "..."`` or
+    ``DESCRIPTION = ("..." "...")`` (string-concat literals).
+    """
+    import ast
+    try:
+        tree = ast.parse(strategy_py.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            continue
+        if node.targets[0].id != "DESCRIPTION":
+            continue
+        try:
+            v = ast.literal_eval(node.value)
+        except Exception:
+            return None
+        return v if isinstance(v, str) else None
+    return None
+
 app = FastAPI(title="researchlab")
 
 # Vite dev server runs on :5173, FastAPI on :8000 — allow CORS in dev.
@@ -173,6 +200,7 @@ def api_strategies():
             n_iters = sum(1 for _ in hist_path.open(encoding="utf-8") if _.strip())
         out.append({
             "name": p.name,
+            "description": _extract_description(p / "strategy.py"),
             "best_composite": (best or {}).get("composite"),
             "best_iter": (best or {}).get("iter"),
             "n_iters": n_iters,
@@ -187,6 +215,7 @@ def api_strategy(name: str):
     code = (d / "strategy.py").read_text(encoding="utf-8")
     return _sanitize({
         "name": name,
+        "description": _extract_description(d / "strategy.py"),
         "best": _load_best(name),
         "history": _load_history(name),
         "program_md": program,

@@ -13,6 +13,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+DESCRIPTION = (
+    "Time-series momentum (trend following). Per asset on 1d bars, "
+    "position = sign of the 14-day trailing return — long if the asset "
+    "has been up, short if down. Each of the 10 majors evaluated "
+    "independently. Classic Moskowitz-Ooi-Pedersen TSM applied to "
+    "crypto: fires when the WHOLE basket trends one direction."
+)
+
 DEFAULT_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",

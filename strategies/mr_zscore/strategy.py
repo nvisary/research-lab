@@ -16,6 +16,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+DESCRIPTION = (
+    "Time-series mean-reversion. Per asset on 1h bars, computes a "
+    "rolling-week z-score of close. Goes long when the asset trades "
+    ">2σ below its own recent mean, short above +2σ; exits when z "
+    "returns to 0. Each of the 10 majors signals independently — "
+    "fires on idiosyncratic extremes regardless of basket trend."
+)
+
 DEFAULT_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",

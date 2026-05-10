@@ -231,13 +231,20 @@ export function StrategyDetail() {
   const best = detail.best;
   return (
     <>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold">
-          <Link to="/" className="text-slate-400 hover:text-slate-100">
-            strategies
-          </Link>{" "}
-          / <span>{name}</span>
-        </h1>
+      <div className="flex items-start justify-between mb-4 gap-4">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl font-semibold">
+            <Link to="/" className="text-slate-400 hover:text-slate-100">
+              strategies
+            </Link>{" "}
+            / <span>{name}</span>
+          </h1>
+          {detail.description && (
+            <div className="text-sm text-slate-400 mt-1.5 leading-snug max-w-3xl">
+              {detail.description}
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-3">
           <label className="text-xs text-slate-400 inline-flex items-center gap-1.5">
             <input

@@ -9,6 +9,7 @@ dependencies = [
     "pyarrow>=15",
     "numpy>=1.26,<3",
     "scipy>=1.11",
+    "statsmodels>=0.14",
     "tqdm>=4.66",
     "vectorbt>=0.26",
     "fastapi>=0.115",

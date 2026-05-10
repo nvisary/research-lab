@@ -32,6 +32,74 @@ balanced 30/30 long-short. In a chopping market with idiosyncratic
 movers (e.g. one alt rallies on its own), TSM may be flat while
 CSM longs the rallying alt and shorts the laggards.
 
+## What's been tried (iters 1–20)
+
+User asked to fix shorts (poor on 2025 drops) and lift 2025 PnL.
+
+| iter | hypothesis | verdict | composite |
+|---|---|---|---|
+|  1 | baseline (lookback=14, sign-of-ret, basket of 10) | BASELINE | −0.25 |
+|  2 | long_only=1 — probe shorts hurt? | REVERT | −2.50 (shorts CRITICAL — W3 falls to −3.51) |
+|  3 | lookback 14→30 | REVERT | −0.44 (W3 rescued but W0/W1 hurt) |
+|  4 | short HTF gate (90d) | REVERT | −1.40 |
+|  5 | entry_threshold=5pct | REVERT | −0.57 |
+| **6** | **asymmetric: long=14d, short=30d** | **KEEP** | **+0.20** (Δ+0.45, W3 −0.77 → +1.22!) |
+|  7 | short_lookback 30→45 | REVERT | 0 trades penalty |
+|  8 | long_lookback 14→21 | REVERT | −0.22 |
+|  9 | vol-target 2pct | REVERT | +0.20 (just below +0.01 threshold; DD ↓ but sharpe ↓) |
+| 10 | skip-7d (12-1 month classic) | REVERT | −2.23 |
+| 11 | short_lookback 30→21 | REVERT | −0.28 |
+| 12 | conviction sizing scale=5 | REVERT | −0.62 |
+| 13 | shrink basket to 3 (BTC/ETH/SOL) | REVERT | only 8 trades |
+| 14 | regime gate 90d both legs | REVERT | −0.90 |
+| 15 | long_lookback 14→7 | REVERT | +0.07, DD 24pct |
+| 16 | dual-agreement (both signals same sign) | REVERT | −0.30 |
+| 17 | short_threshold=3pct | REVERT | −0.34 |
+| **18** | **+ ema_smooth=3 days on close** | **KEEP** | **+0.46** (Δ+0.26, OOS sharpe +1.35) |
+| 19 | ema_smooth 3→5 | REVERT | only 9 trades |
+| 20 | ema_smooth 3→2 | REVERT | +0.08 |
+
+## Champion (iter 18) parameters
+
+```
+DEFAULT_TF      = "1d"
+lookback        = 14   (long signal: sign of 14d return)
+short_lookback  = 30   (short signal: sign of 30d return — slow confirm)
+ema_smooth      = 3    (3-day EMA on close before momentum calc)
+long_only       = 0
+DEFAULT_SYMBOLS = 10 majors
+```
+
+Per-window OOS sharpe:
+- W0 (24-H1): +1.15
+- W1 (24-H2): +3.16
+- W2 (25-H1): −0.26
+- W3 (25-H2): +1.34
+
+OOS sharpe +1.35, max DD 12.4pct, 14 trades, DSR 0.64.
+
+User asks revisited:
+1. **Shorts work poorly** — FIXED. W3 (25-H2 cycle peak with strong drops) went from
+   baseline −0.77 to champion +1.34. Asymmetric short_lookback=30 stops 14d-flip whipsaws
+   on counter-trend bounces; ema_smooth=3 cuts daily noise that triggered false reversals.
+2. **2025 was in the red** — PARTIALLY FIXED. W3 fully rescued (+1.34). W2 (25-H1) still
+   slightly negative (−0.26 vs −0.58 baseline) — improved but the regime (Q1-Q2 2025
+   alt rotation with sharp BTC pullbacks) remains hostile to TSM. Combined 2025 now
+   mixed instead of uniformly red.
+
+## What's been ruled out
+
+- **No-shorts (long_only)** — shorts contribute meaningfully; W3 needs them.
+- **Slow long signals (21+, 30d)** — too slow for bull rallies (W0/W1 hurt).
+- **Skip-week (classic 12-1)** — crypto doesn't show the short-term reversal that
+  equity momentum factor relies on. −2.23 catastrophic.
+- **Magnitude / hard threshold filters** — destroy edge by cutting marginal-but-correct
+  signals. −0.57 (5pct) and −0.34 (3pct short-only).
+- **Regime gates (90d both legs)** — too restrictive, cuts legitimate trades.
+- **Dual-agreement** — drops choppy bars but loses trade count.
+- **Basket shrinkage to top-3** — sample size collapses (8 trades on 24mo).
+- **Conviction sizing** — small signals were valuable, not noise.
+
 ## Open questions
 
 - Lookback sweep — 7 / 14 / 30 / 60 / 90 days

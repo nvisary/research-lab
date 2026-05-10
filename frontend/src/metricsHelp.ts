@@ -23,7 +23,7 @@ export const HELP: Record<string, string> = {
   symbols:
     "Trading universe — strategy.py:DEFAULT_SYMBOLS.",
   period:
-    "Train+val period the iteration ran over. Holdout (Oct 2025 → Apr 2026) is separate and not " +
+    "Train+val period the iteration ran over. Holdout (Jan 2026 → Apr 2026) is separate and not " +
     "visible to runner.iterate.",
   note:
     "The hypothesis the agent stated when running this iteration via --note. Future-you reads it.",

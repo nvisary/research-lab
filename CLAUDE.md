@@ -34,6 +34,14 @@ When the user says "iterate on `<strategy_name>`" or similar:
 7. **Stop conditions.** No improvement in 10–20 iterations on the same
    hypothesis-family — write a paragraph in `program.md` summarizing what
    was ruled out, and ask the user for a new direction.
+8. **Keep `program.md` current — hard rule.** Update it at the **end of
+   every iteration batch** (5+ iters) AND at any single iter that
+   produces a notable result (KEEP with breakthrough, surprising REVERT,
+   newly ruled-out family). The minimum entry is one row in the iter
+   table with verdict + composite + one-line note. The full "what's
+   been ruled out" paragraph is required when stopping a hypothesis
+   family. Never end a session leaving program.md staler than the
+   running history.
 
 ## Commit rules
 

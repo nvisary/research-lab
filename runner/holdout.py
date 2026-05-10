@@ -12,7 +12,7 @@ again does not pile up duplicate reports).
 
 Usage:
     uv run python -m runner.holdout strategies/<name>
-    uv run python -m runner.holdout strategies/<name> --start 2025-10-01 --end 2026-01-01
+    uv run python -m runner.holdout strategies/<name> --start 2026-01-01 --end 2026-05-01
 """
 from __future__ import annotations
 

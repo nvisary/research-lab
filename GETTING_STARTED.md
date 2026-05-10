@@ -195,12 +195,12 @@ edge probably generalizes. If not, you found an overfit.
 |---|---|---|---|
 | **Train** | First 75% of each WF window | Strategy, agent, you | Indicator warmup, fitting |
 | **OOS** (also called "validation") | Last 25% of each WF window | Agent, dashboard, `composite` | Validates each iteration |
-| **Holdout** | 2025-10-01 → 2026-04-30 (7 mo) | **Nobody during iteration** | Final, honest sanity check |
+| **Holdout** | 2026-01-01 → 2026-04-30 (4 mo) | **Nobody during iteration** | Final, honest sanity check |
 
-Default `runner.iterate` covers `2024-01-01 → 2025-10-01` (21 months).
+Default `runner.iterate` covers `2024-01-01 → 2026-01-01` (24 months).
 With `walk_windows=4` (also default), this is sliced into 4 windows of
-~5.25 months each, and **inside every window** the first ~4 months are
-train and the last ~1.3 months are OOS:
+~6 months each, and **inside every window** the first ~4.5 months are
+train and the last ~1.5 months are OOS:
 
 ```
    w0:  Jan 2024 ──────────── Jun 2024
@@ -250,7 +250,7 @@ noise-fit artifact". But DSR is still computed on data the agent has
 been seeing. The only fully-honest answer is: evaluate the *final*
 strategy on a slice the loop has **never** touched.
 
-That's the holdout (default `2025-10-01 → 2026-04-30`, ~7 months).
+That's the holdout (default `2026-01-01 → 2026-04-30`, ~4 months).
 `runner.iterate` never reads it; it lives behind a separate command
 (`runner.holdout`) that you run manually when you decide iteration is
 done.
@@ -354,13 +354,13 @@ When you decide to stop iterating:
 uv run python -m runner.holdout strategies/ema_pilot
 ```
 
-This evaluates the current `best_strategy.py` on **2025-10 → 2026-04**,
-data the iteration loop never touched. Output:
+This evaluates the current `best_strategy.py` on **2026-Q1 + Apr**
+(2026-01-01 → 2026-05-01), data the iteration loop never touched. Output:
 
 ```json
 {
   "iter": 12,
-  "period": ["2025-10-01", "2026-05-01"],
+  "period": ["2026-01-01", "2026-05-01"],
   "composite_holdout": -0.91,
   "best_composite_train_val": -0.45,
   "sharpe": -0.78,

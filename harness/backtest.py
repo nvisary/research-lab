@@ -7,7 +7,7 @@ The harness:
   4. Computes the standard metric panel.
 
 Usage:
-    python -m harness.backtest strategies/ema_pilot --start 2024-01-01 --end 2025-10-01
+    python -m harness.backtest strategies/ema_pilot --start 2024-01-01 --end 2026-01-01
 """
 from __future__ import annotations
 

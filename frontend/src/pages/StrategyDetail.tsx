@@ -382,7 +382,7 @@ export function StrategyDetail() {
         )}
       </Card>
 
-      <Card title="Holdout sanity check (2025-10 → 2026-04, never seen by iteration)">
+      <Card title="Holdout sanity check (2026-01 → 2026-04, never seen by iteration)">
         <div className="flex items-start gap-6 flex-wrap">
           <div className="flex-1 min-w-[260px]">
             {!holdout?.report ? (

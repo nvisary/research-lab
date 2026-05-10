@@ -43,8 +43,8 @@ from datafeed.loader import load_many
 @dataclass
 class IterationConfig:
     # Default split (see AGENTS.md):
-    #   train+val = Jan 2024 .. Sep 2025  (used for composite score & keep/revert)
-    #   holdout   = Oct 2025 .. Dec 2025  (NEVER touched here — see runner.holdout)
+    #   train+val = Jan 2024 .. Dec 2025  (used for composite score & keep/revert)
+    #   holdout   = Jan 2026 .. Apr 2026  (NEVER touched here — see runner.holdout)
     period_start: str = "2024-01-01"
     period_end: str = "2026-01-01"
     # tf=None means "read from strategy.py:DEFAULT_TF, fall back to 1h".

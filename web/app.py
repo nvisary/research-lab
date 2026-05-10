@@ -309,8 +309,16 @@ def api_monthly_returns(name: str, iter_id: int):
         rets_concat = df.set_index("timestamp")["equity"].pct_change().fillna(0.0)
 
     # Build a synthetic continuous equity, compound it, then resample.
-    eq_synth = (1.0 + rets_concat).cumprod()
-    monthly = eq_synth.resample("MS").last().pct_change().dropna()
+    # Per-month compounded return computed from per-bar returns, NOT
+    # via pct_change() of monthly-last:
+    #   - pct_change-of-last drops the first month entirely (NaN first
+    #     value silently removed by .dropna()) — Jan 2024 was missing.
+    #   - (last / first) - 1 within each month loses the transition bar
+    #     between months (end-of-A → start-of-B) — slight undercounting.
+    # Using prod(1 + r) on the per-bar returns over each month assigns
+    # every bar to exactly one month, no gap or double-count, and the
+    # first month is included naturally.
+    monthly = ((1.0 + rets_concat).resample("MS").prod() - 1.0).dropna()
 
     if monthly.empty:
         return _sanitize({

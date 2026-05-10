@@ -229,6 +229,63 @@ def build(iter_data: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame | No
     else:
         rolling_div = '<em class="dim">rolling Sharpe: insufficient data</em>'
 
+    # ----- Regime decomposition (vol × trend buckets) -----
+    try:
+        from harness.diagnostics import compute_regime
+        regime = compute_regime(df, tf=tf)
+    except Exception:
+        regime = {}
+    if regime and regime.get("buckets"):
+        # 4×3 heatmap: vol on rows (v1..v4), trend on cols (bear/flat/bull).
+        vol_levels = ["v1", "v2", "v3", "v4"]
+        trend_levels = ["bear", "flat", "bull"]
+        sh_z: list[list[Any]] = []
+        text_z: list[list[str]] = []
+        for v in vol_levels:
+            row_sh: list[Any] = []
+            row_txt: list[str] = []
+            for t in trend_levels:
+                cell = next((c for c in regime["buckets"]
+                             if c["vol"] == v and c["trend"] == t), None)
+                if cell is None or cell.get("sharpe") is None:
+                    row_sh.append(None)
+                    row_txt.append("—")
+                else:
+                    row_sh.append(cell["sharpe"])
+                    row_txt.append(
+                        f"Sh {cell['sharpe']:+.2f}<br>"
+                        f"n={cell['n_bars']}<br>"
+                        f"hit {cell['hit_rate_pct']:.0f}%"
+                    )
+            sh_z.append(row_sh)
+            text_z.append(row_txt)
+        regime_div = _plotly_div("regime", [{
+            "z": sh_z,
+            "x": ["bear", "flat", "bull"],
+            "y": [f"vol {v}" for v in vol_levels],
+            "type": "heatmap",
+            "colorscale": [[0, "#ef4444"], [0.5, "#1e293b"], [1, "#22c55e"]],
+            "zmid": 0,
+            "zmin": -2.0,
+            "zmax": 2.0,
+            "text": text_z,
+            "texttemplate": "%{text}",
+            "hovertemplate": "%{y} × %{x}<br>%{text}<extra></extra>",
+        }], {
+            "yaxis": {"autorange": "reversed"},
+            "annotations": [],
+        }, height=260)
+        regime_summary = _kv_table([
+            ("buckets healthy (Sh > 0.5)",
+             f"{regime['n_buckets_healthy']} / {regime['n_buckets_total']}"),
+            ("buckets lossy (Sh < 0)",
+             f"{regime['n_buckets_lossy']} / {regime['n_buckets_total']}"),
+            ("rolling window (bars)", regime.get("window_bars", "—")),
+        ])
+    else:
+        regime_div = '<em class="dim">regime: insufficient data</em>'
+        regime_summary = ""
+
     # ----- Worst drawdowns -----
     worst = _worst_drawdowns(eq_concat, n=5)
     if worst:
@@ -378,6 +435,10 @@ th, td {{ padding: 6px 10px; text-align: left; border-bottom: 1px solid #334155;
   <section><h2>Monthly returns</h2>{heatmap_div}</section>
   <section><h2>Rolling 30d Sharpe</h2>{rolling_div}</section>
 </div>
+
+<section><h2>Regime breakdown (vol × trend)</h2>
+<div class="row2"><div>{regime_div}</div><div>{regime_summary}</div></div>
+</section>
 
 <section><h2>Trades</h2>
 <div class="row2"><div>{trade_summary}</div><div>{trade_hist}</div></div>

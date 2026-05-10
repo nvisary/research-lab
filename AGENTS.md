@@ -272,6 +272,38 @@ A strategy that maximizes composite while failing these is suspect:
 - **Probabilistic Sharpe Ratio (PSR)** — probability that observed Sharpe exceeds 0 given sample size, skew, and kurtosis. Per-window, in `metrics.oos.psr`. PSR > 0.95 = strong signal even adjusted for short samples.
 - **Deflated Sharpe Ratio (DSR)** — PSR adjusted for the number of trials in your selection process (current iter count). Top-level field in `best.json` and history. Watch DSR fall as you iterate even if composite rises — that's the selection-bias tax made visible. DSR < 0.5 = the best is most likely a noise-fit artifact.
 - **Bootstrap Sharpe CI** — stationary block bootstrap (Politis-Romano), per-window in `metrics.oos.sharpe_ci_lo / _hi`. If the lower bound includes 0, the result is statistically indistinguishable from luck.
+- **Profit Factor / Expectancy / VaR-CVaR / Information Ratio** — institutional-standard trade-shape and tail-risk metrics. Available in `metrics.oos.*`. Profit Factor < 1.0 means cumulative losses exceed cumulative wins; CVaR is conditional-tail loss expectation.
+
+### How diagnostics are surfaced (read this once)
+
+The harness computes a long tail of secondary metrics (regime
+decomposition, fat-tail checks, monthly streaks, stitched-equity
+reconciliation, capacity, and so on). To keep the verdict you read
+short and decision-relevant, the convention is:
+
+- **1-line flag → agent.** The verdict JSON's `diagnostics.flags`
+  array contains short ✓/⚠/✗/ℹ lines that summarize the heavy
+  diagnostics. Always scan `flags` first.
+- **Full tables → tearsheet.** The HTML tearsheet
+  (`runs/tearsheets/iter_NNNN.html`) has the full breakdowns
+  (per-regime Sharpe table, per-window decomposition, etc.) for
+  the human reviewer. Do not re-derive them in your iteration —
+  if you need a number that's only in the tearsheet, ask the human
+  to inspect it.
+
+The same convention applies to all future diagnostics added to the
+harness. If you find yourself parsing many numbers out of the JSON
+to reach a verdict, you're working at the wrong layer.
+
+### `vs_best` delta block
+
+The verdict JSON includes a `vs_best` block (when a prior best
+exists) with deltas of the key metrics — composite, OOS Sharpe,
+MaxDD, n_trades, DSR, Profit Factor, Information Ratio. Use this
+to spot subtle regressions: e.g. composite ↑0.05 but MaxDD ↑3%
+and PF ↓0.2 means the score went up via a Sharpe boost that came
+with worse risk shape. The block does **not** drive any keep/revert
+decision — it's purely informative.
 
 ---
 
@@ -386,8 +418,16 @@ The framework has explicit, documented blind spots. Read the
 weight on results that depend on them. Summary:
 
 - **Survivorship bias** in the symbol universe — only currently-listed
-  Bybit perps are included. Multi-symbol cross-sectional results are
-  biased upward; single-symbol BTC results are not.
+  Bybit perps are included. The current universe is small and
+  delistings are rare, so for **single-symbol BTC** strategies the
+  effect is negligible. For **multi-symbol cross-sectional** strategies
+  the bias is non-trivial: the stocks of "winners" outperform a
+  delisting-aware universe by construction. **If you propose extending
+  `DEFAULT_SYMBOLS`** (especially to alt-perps or historical-only
+  symbols), explicitly flag this in the hypothesis note and discount
+  any cross-sectional Sharpe accordingly. If you propose extending to
+  spots or to a multi-year backtest, raise it with the human first —
+  the data layer doesn't have delisting-aware history yet.
 - **Single shared cash book** under vectorbt's `cash_sharing+group_by`.
   Fee allocation between symbols is opaque to live reproduction. OK
   for the pilot, will need a different engine for proper multi-symbol.

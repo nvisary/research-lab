@@ -22,7 +22,114 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
+
+
+def compute_regime(equity_df: pd.DataFrame, tf: str | None = None) -> dict:
+    """Vol × Trend regime decomposition of strategy returns.
+
+    Buckets each bar by (a) rolling std of benchmark (BTC) returns and
+    (b) rolling mean of benchmark returns; both are 2-day rolling.
+    Quantile-cuts vol into 4 quartiles and trend into 3 terciles, so 12
+    cells. For each cell, computes annualized Sharpe of the *strategy*
+    return restricted to bars in that cell — so the table answers
+    "where in the (vol, trend) plane does the edge live?".
+
+    Cheap to run on every iter (a few rolling reductions). The full
+    table goes into the diagnostics JSON; the agent reads only a
+    one-line flag derived from it.
+
+    Returns ``{}`` if the curve is too short or the benchmark is
+    missing — never raises.
+    """
+    if equity_df is None or equity_df.empty:
+        return {}
+    if "benchmark" not in equity_df.columns or "equity" not in equity_df.columns:
+        return {}
+
+    df = equity_df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    if "window" in df.columns:
+        # Stitch per-window in chronological order. Per-bar pct_change
+        # within each window is used so cross-window jumps don't poison
+        # the return series.
+        parts_eq, parts_b = [], []
+        for _, g in df.groupby("window"):
+            g = g.sort_values("timestamp").set_index("timestamp")
+            parts_eq.append(g["equity"].pct_change())
+            parts_b.append(g["benchmark"].pct_change())
+        strat_ret = pd.concat(parts_eq).sort_index().dropna()
+        bench_ret = pd.concat(parts_b).sort_index().dropna()
+    else:
+        s = df.sort_values("timestamp").set_index("timestamp")
+        strat_ret = s["equity"].pct_change().dropna()
+        bench_ret = s["benchmark"].pct_change().dropna()
+
+    aligned = pd.concat([strat_ret, bench_ret], axis=1, join="inner").dropna()
+    aligned.columns = ["s", "b"]
+    if len(aligned) < 100:
+        return {}
+
+    from harness.metrics import TF_PERIODS_PER_YEAR
+    ppy = TF_PERIODS_PER_YEAR.get(tf, 365.25 * 24)  # fall back to 1h
+    bars_per_day = max(1.0, ppy / 365.25)
+    W = max(10, int(round(2 * bars_per_day)))
+
+    vol = aligned["b"].rolling(W).std()
+    trend = aligned["b"].rolling(W).mean()
+    valid = vol.notna() & trend.notna()
+    if int(valid.sum()) < 100:
+        return {}
+
+    vol_v = vol[valid]
+    trend_v = trend[valid]
+    sret = aligned["s"][valid]
+
+    try:
+        vb = pd.qcut(vol_v, q=4, labels=["v1", "v2", "v3", "v4"], duplicates="drop")
+        tb = pd.qcut(trend_v, q=3, labels=["bear", "flat", "bull"], duplicates="drop")
+    except Exception:
+        return {}
+
+    ann = float(np.sqrt(ppy))
+    table: list[dict[str, Any]] = []
+    for v_lvl in list(vb.cat.categories):
+        for t_lvl in list(tb.cat.categories):
+            mask = (vb == v_lvl) & (tb == t_lvl)
+            n = int(mask.sum())
+            cell: dict[str, Any] = {
+                "vol": str(v_lvl), "trend": str(t_lvl),
+                "n_bars": n,
+            }
+            if n < 5:
+                cell.update({"sharpe": None, "mean_ret_bps": None,
+                             "hit_rate_pct": None})
+            else:
+                r_in = sret[mask]
+                sd = float(r_in.std(ddof=0))
+                sh = float(r_in.mean() / sd * ann) if sd > 0 else 0.0
+                cell.update({
+                    "sharpe": round(sh, 2),
+                    # Mean per-bar return in basis points — rescaled so
+                    # the table reads in human units regardless of TF.
+                    "mean_ret_bps": round(float(r_in.mean()) * 1e4, 2),
+                    "hit_rate_pct": round(float((r_in > 0).mean()) * 100, 1),
+                })
+            table.append(cell)
+
+    eligible = [c for c in table if c["sharpe"] is not None and c["n_bars"] >= 20]
+    n_total = len(eligible)
+    n_healthy = sum(1 for c in eligible if c["sharpe"] > 0.5)
+    n_loss = sum(1 for c in eligible if c["sharpe"] < 0)
+
+    return {
+        "window_bars": W,
+        "n_buckets_total": n_total,
+        "n_buckets_healthy": n_healthy,
+        "n_buckets_lossy": n_loss,
+        "buckets": table,
+    }
 
 
 def build_diagnostics(iter_id: int, runs_dir: Path, summary: dict,
@@ -111,6 +218,17 @@ def build_diagnostics(iter_id: int, runs_dir: Path, summary: dict,
         try:
             tr_df = pd.read_parquet(tr_path)
             out["shape"] = _trade_shape(tr_df)
+        except Exception:
+            pass
+
+    # --- Regime decomposition (vol × trend buckets) ---
+    if eq_path.exists():
+        try:
+            eq_df = pd.read_parquet(eq_path)
+            tf = result.get("tf") if isinstance(result, dict) else None
+            reg = compute_regime(eq_df, tf=tf)
+            if reg:
+                out["regime"] = reg
         except Exception:
             pass
 
@@ -221,14 +339,31 @@ def _trade_shape(tr_df: pd.DataFrame) -> dict:
     out = {
         "n_trades": n,
         "win_rate_pct": round(float((pnl > 0).sum()) / max(n, 1) * 100, 1),
+        "expectancy_usd": round(float(pnl.mean()), 2) if n else None,
     }
     if len(wins) > 0 and len(losses) > 0:
         out["payoff_ratio"] = round(float(wins.mean() / (-losses.mean())), 2)
+        # Profit factor: Σ(wins)/|Σ(losses)|. Different from payoff_ratio
+        # (which is mean win / mean loss) — PF accounts for trade COUNTS,
+        # so a strategy with 90% small wins and 10% giant losses can have
+        # a great payoff but a bad PF.
+        loss_sum = float(-losses.sum())
+        if loss_sum > 0:
+            out["profit_factor"] = round(float(wins.sum() / loss_sum), 2)
         if "return_pct" in tr_df.columns:
             out["median_win_pct"] = round(
                 float(tr_df.loc[pnl > 0, "return_pct"].median()) * 100, 2)
             out["median_loss_pct"] = round(
                 float(tr_df.loc[pnl < 0, "return_pct"].median()) * 100, 2)
+            out["avg_win_pct"] = round(
+                float(tr_df.loc[pnl > 0, "return_pct"].mean()) * 100, 2)
+            out["avg_loss_pct"] = round(
+                float(tr_df.loc[pnl < 0, "return_pct"].mean()) * 100, 2)
+    elif len(wins) > 0:
+        # All wins, no losses — JSON can't represent inf cleanly.
+        out["profit_factor"] = None
+    elif len(losses) > 0:
+        out["profit_factor"] = 0.0
 
     # Fat-tail check: largest single trade as % of |total pnl|
     total = float(pnl.sum())
@@ -331,6 +466,39 @@ def _flags(diag: dict, summary: dict) -> list[str]:
         flags.append(
             f"⚠⚠ OOS Sharpe {sh:+.2f} but 24mo stitched {cmp_ret:+.1f}pct "
             f"— edge lives in OOS slices only, suspect WF calendar bias")
+
+    # Regime decomposition: how many vol×trend buckets carry the edge?
+    regime = diag.get("regime", {})
+    rt = int(regime.get("n_buckets_total", 0))
+    rh = int(regime.get("n_buckets_healthy", 0))
+    if rt >= 6:
+        share = rh / rt
+        if share <= 0.25:
+            flags.append(
+                f"✗ regime: {rh}/{rt} buckets healthy "
+                f"(Sharpe>0.5) — single-regime strategy")
+        elif share < 0.5:
+            flags.append(
+                f"⚠ regime: {rh}/{rt} buckets healthy — "
+                f"limited regime coverage")
+        else:
+            flags.append(
+                f"✓ regime: {rh}/{rt} buckets healthy — multi-regime")
+
+    # Profit Factor: < 1.0 means cumulative losses > wins, regardless
+    # of Sharpe. Flag visibly because PF is the single best leading
+    # indicator of "looks good but isn't".
+    pf = (summary.get("oos_metrics") or {}).get("profit_factor") if \
+         isinstance(summary.get("oos_metrics"), dict) else None
+    # Fall back to shape (per-iter trade aggregate) if oos_metrics not
+    # yet wired into summary.
+    if pf is None:
+        pf = (shape or {}).get("profit_factor")
+    if pf is not None:
+        if pf < 1.0:
+            flags.append(f"✗ profit_factor {pf:.2f} < 1.0 — losses dominate")
+        elif pf < 1.3:
+            flags.append(f"⚠ profit_factor {pf:.2f} — thin edge")
 
     return flags
 

@@ -561,6 +561,85 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "error": error,
     }
 
+    # vs_best: deltas of all key metrics vs the prior best. Informative
+    # only — doesn't drive keep/revert. Surfaces "composite +0.05 but
+    # MaxDD +3% and PF -0.2" kind of trade-offs that the headline
+    # composite hides. Skipped on first iter (no prior best).
+    if best is not None and not error and composite != float("-inf"):
+        try:
+            cur_wf = wf_agg or {}
+            best_wf = best.get("wf_aggregate") or {}
+            best_oos_legacy = ((best.get("metrics") or {}).get("oos")) or {}
+
+            def _pick_cur(field_wf: str, field_legacy: str | None = None) -> float | None:
+                if cur_wf.get(field_wf) is not None:
+                    return cur_wf.get(field_wf)
+                if field_legacy is not None:
+                    return oos.get(field_legacy)
+                return None
+
+            def _pick_best(field_wf: str, field_legacy: str | None = None) -> float | None:
+                if best_wf.get(field_wf) is not None:
+                    return best_wf.get(field_wf)
+                if field_legacy is not None:
+                    return best_oos_legacy.get(field_legacy)
+                return None
+
+            def _delta(cur, prev, ndigits: int = 4) -> float | None:
+                if cur is None or prev is None:
+                    return None
+                try:
+                    return round(float(cur) - float(prev), ndigits)
+                except Exception:
+                    return None
+
+            # (current_field_wf, current_field_legacy, best_field_wf, best_field_legacy, label)
+            fields = [
+                ("mean_sharpe", "sharpe", "mean_sharpe", "sharpe", "sharpe"),
+                ("worst_max_dd", "max_dd", "worst_max_dd", "max_dd", "max_dd"),
+                ("mean_n_trades", "n_trades", "mean_n_trades", "n_trades", "n_trades"),
+                ("mean_profit_factor", "profit_factor",
+                 "mean_profit_factor", "profit_factor", "profit_factor"),
+                ("mean_expectancy", "expectancy",
+                 "mean_expectancy", "expectancy", "expectancy"),
+                ("mean_information_ratio", "information_ratio",
+                 "mean_information_ratio", "information_ratio",
+                 "information_ratio"),
+                ("worst_cvar_95", "cvar_95",
+                 "worst_cvar_95", "cvar_95", "cvar_95"),
+            ]
+
+            vs: dict[str, dict] = {
+                "composite": {
+                    "cur": (round(composite, 4) if composite != float("-inf")
+                            else None),
+                    "prev": (round(best_score, 4) if best_score != float("-inf")
+                             else None),
+                    "delta": _delta(composite, best_score),
+                },
+                "dsr": {
+                    "cur": round(dsr_value, 4),
+                    "prev": (round(float(best.get("dsr")), 4)
+                             if best.get("dsr") is not None else None),
+                    "delta": _delta(dsr_value, best.get("dsr")),
+                },
+            }
+            for cw, cl, bw, bl, label in fields:
+                cur_v = _pick_cur(cw, cl)
+                prev_v = _pick_best(bw, bl)
+                vs[label] = {
+                    "cur": (round(float(cur_v), 4) if cur_v is not None else None),
+                    "prev": (round(float(prev_v), 4) if prev_v is not None else None),
+                    "delta": _delta(cur_v, prev_v),
+                }
+            summary["vs_best"] = {
+                "best_iter": best.get("iter"),
+                "fields": vs,
+            }
+        except Exception:
+            # vs_best is informative — never block iteration on a bug here.
+            pass
+
     # Rich diagnostics — best-effort. Surfaces per-window shape, DSR
     # trajectory, monthly streaks, fat-tail checks, and one-line flags
     # the agent should scan after each iter. See harness/diagnostics.py.

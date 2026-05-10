@@ -118,6 +118,121 @@ def hit_rate(returns: pd.Series) -> float:
     return float((r > 0).mean())
 
 
+def profit_factor(trade_pnls: pd.Series) -> float:
+    """Σ(wins) / |Σ(losses)|.
+
+    Returns NaN if there were no trades, ``inf`` if there were no losers
+    (all-positive). PF < 1.0 means cumulative losses dominate wins; the
+    "industry rule of thumb" is PF > 1.5 = decent, > 2.0 = strong.
+    """
+    p = pd.Series(trade_pnls).dropna()
+    if p.empty:
+        return float("nan")
+    wins_sum = float(p[p > 0].sum())
+    losses_sum = float(-p[p < 0].sum())
+    if losses_sum == 0:
+        return float("inf") if wins_sum > 0 else float("nan")
+    return wins_sum / losses_sum
+
+
+def expectancy(trade_pnls: pd.Series) -> float:
+    """Mean PnL per trade in quote-currency units (USD).
+
+    This is the canonical expectancy: ``E[trade]``. Equivalent to
+    ``WR·AvgWin − LR·AvgLoss`` but computed directly so it doesn't
+    suffer from rounding discrepancies. Compare against estimated
+    per-trade cost (fees + slippage) — a strategy whose expectancy
+    is below cost is structurally a money-loser.
+    """
+    p = pd.Series(trade_pnls).dropna()
+    if p.empty:
+        return float("nan")
+    return float(p.mean())
+
+
+def avg_win_loss(trade_pnls: pd.Series) -> tuple[float, float]:
+    """Mean win and mean loss (both as positive numbers).
+
+    Returns ``(avg_win, avg_loss)``. ``avg_loss`` is positive (so
+    payoff ratio is ``avg_win / avg_loss`` directly). NaN when the
+    side is empty.
+    """
+    p = pd.Series(trade_pnls).dropna()
+    wins = p[p > 0]
+    losses = p[p < 0]
+    aw = float(wins.mean()) if not wins.empty else float("nan")
+    al = float(-losses.mean()) if not losses.empty else float("nan")
+    return aw, al
+
+
+def var_cvar(returns: pd.Series, levels: tuple[float, ...] = (0.95, 0.99),
+             tf: str | None = None) -> dict:
+    """Value-at-Risk and Conditional VaR (Expected Shortfall) at given levels.
+
+    Both expressed as positive fractions on **daily** returns: a VaR_95
+    of 0.04 means "5% of days lost more than 4%". When ``tf`` indicates
+    sub-daily bars, the bar-level returns are compounded to daily before
+    the percentile is taken — keeps the unit comparable across TFs and
+    matches how VaR is conventionally reported.
+
+    Returns a dict like ``{"var_95": ..., "cvar_95": ..., "var_99":
+    ..., "cvar_99": ...}``. Values are ``None`` when the sample is too
+    small (<20 daily obs) to make the tail estimate meaningful.
+    """
+    out: dict[str, float | None] = {}
+    for lev in levels:
+        pct = int(round(lev * 100))
+        out[f"var_{pct}"] = None
+        out[f"cvar_{pct}"] = None
+    r = pd.Series(returns).dropna()
+    if r.empty:
+        return out
+    # Resample to daily when bar-level. The conventional unit for VaR
+    # is daily, and percentiles on 1m bars are not interpretable.
+    if tf and tf in TF_PERIODS_PER_YEAR:
+        bars_per_day = TF_PERIODS_PER_YEAR[tf] / 365.25
+        if bars_per_day > 1.5:
+            r = ((1 + r).resample("1D").prod() - 1).dropna()
+    if len(r) < 20:
+        return out
+    for lev in levels:
+        pct = int(round(lev * 100))
+        # Lower-tail percentile of returns — i.e. the (1-lev)-th quantile.
+        thresh = float(r.quantile(1.0 - lev))
+        var = -thresh  # positive number
+        tail = r[r <= thresh]
+        cvar = float(-tail.mean()) if not tail.empty else var
+        out[f"var_{pct}"] = float(var)
+        out[f"cvar_{pct}"] = float(cvar)
+    return out
+
+
+def information_ratio(returns: pd.Series, bench_returns: pd.Series,
+                      tf: str | None = None) -> float:
+    """Annualized Information Ratio vs a benchmark.
+
+    ``IR = mean(strat - bench) / std(strat - bench) · √periods_per_year``
+
+    The institutional analog of "alpha-Sharpe": measures excess return
+    per unit of *tracking* volatility. >0.5 is decent, >1.0 is strong
+    (over the same horizon and benchmark). Aligns the two series on
+    their common index and drops bars where either is missing.
+    """
+    s = pd.Series(returns).dropna()
+    b = pd.Series(bench_returns).dropna()
+    if s.empty or b.empty:
+        return 0.0
+    aligned = pd.concat([s, b], axis=1, join="inner").dropna()
+    if len(aligned) < 30:
+        return 0.0
+    excess = aligned.iloc[:, 0] - aligned.iloc[:, 1]
+    sd = float(excess.std(ddof=0))
+    if sd == 0:
+        return 0.0
+    return float(excess.mean() / sd
+                 * np.sqrt(_resolve_periods_per_year(excess.index, tf)))
+
+
 def _longest_true_run(arr: np.ndarray) -> int:
     """Length of the longest contiguous True run in a boolean array."""
     if len(arr) == 0:
@@ -164,6 +279,14 @@ def quality_metrics(equity: pd.Series, returns: pd.Series,
         "median_trade_duration_hours": None,
         "skew": None,
         "kurt": None,
+        "profit_factor": None,
+        "expectancy": None,
+        "avg_win": None,
+        "avg_loss": None,
+        "var_95": None,
+        "cvar_95": None,
+        "var_99": None,
+        "cvar_99": None,
     }
     # ---- Monthly consistency ----
     if equity is not None and len(equity) >= 2:
@@ -254,6 +377,32 @@ def quality_metrics(equity: pd.Series, returns: pd.Series,
         except Exception:
             pass
 
+    # ---- Trade-shape metrics (PF / expectancy / mean win-loss) ----
+    if trades_in_slice is not None and not trades_in_slice.empty \
+            and "pnl_quote" in trades_in_slice.columns:
+        pnl = trades_in_slice["pnl_quote"].dropna()
+        if not pnl.empty:
+            try:
+                pf = profit_factor(pnl)
+                # JSON cannot serialize inf — clamp to a large sentinel.
+                out["profit_factor"] = (None if (isinstance(pf, float)
+                                                 and (np.isnan(pf) or np.isinf(pf)))
+                                        else float(pf))
+                out["expectancy"] = float(expectancy(pnl))
+                aw, al = avg_win_loss(pnl)
+                out["avg_win"] = (None if np.isnan(aw) else float(aw))
+                out["avg_loss"] = (None if np.isnan(al) else float(al))
+            except Exception:
+                pass
+
+    # ---- VaR / CVaR (daily, 95% and 99%) ----
+    if returns is not None and len(returns.dropna()) >= 20:
+        try:
+            vc = var_cvar(returns, levels=(0.95, 0.99), tf=tf)
+            out.update(vc)
+        except Exception:
+            pass
+
     return out
 
 
@@ -307,14 +456,21 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
     except Exception:
         ci_lo, ci_hi = sh, sh
     bench_sh: float | None = None
+    info_ratio: float | None = None
     if benchmark is not None and len(benchmark.dropna()) > 1:
-        bench_sh = float(sharpe(benchmark.pct_change(), tf=tf))
+        bench_ret = benchmark.pct_change()
+        bench_sh = float(sharpe(bench_ret, tf=tf))
+        try:
+            info_ratio = float(information_ratio(returns, bench_ret, tf=tf))
+        except Exception:
+            info_ratio = None
     cap = capacity_metrics(trades_in_slice)
     qual = quality_metrics(equity, returns, positions, trades_in_slice, tf=tf)
     return {
         "sharpe": sh,
         "bench_sharpe": bench_sh,
         "alpha_sharpe": (sh - bench_sh) if bench_sh is not None else None,
+        "information_ratio": info_ratio,
         "sortino": sortino(returns, tf=tf),
         "calmar": calmar(equity),
         "cagr": cagr(equity),
@@ -425,6 +581,22 @@ def aggregate_wf_composite(window_metrics: list[dict],
         # Sharpe gap: max across windows (worst-case overfit signal).
         "worst_sharpe_gap": _agg("sharpe_gap", np.max),
         "mean_sharpe_gap": _agg("sharpe_gap", np.mean),
+        # Trade-shape metrics: mean across windows for the central
+        # tendency, plus min PF as the conservative aggregate (one
+        # bad window with PF<1 sinks the strategy).
+        "mean_profit_factor": _agg("profit_factor", np.mean),
+        "min_profit_factor": _agg("profit_factor", np.min),
+        "mean_expectancy": _agg("expectancy", np.mean),
+        "mean_avg_win": _agg("avg_win", np.mean),
+        "mean_avg_loss": _agg("avg_loss", np.mean),
+        # Tail risk: worst-case (max) is the conservative aggregate.
+        "worst_var_95": _agg("var_95", np.max),
+        "worst_cvar_95": _agg("cvar_95", np.max),
+        "worst_var_99": _agg("var_99", np.max),
+        "worst_cvar_99": _agg("cvar_99", np.max),
+        # Information ratio vs benchmark: mean and median.
+        "mean_information_ratio": _agg("information_ratio", np.mean),
+        "median_information_ratio": _agg("information_ratio", np.median),
     }
     cagrs = [m.get("cagr", 0.0) for m in window_metrics]
     total_returns = [m.get("total_return", 0.0) for m in window_metrics]

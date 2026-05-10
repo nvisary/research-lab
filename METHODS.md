@@ -171,6 +171,14 @@ Implement these only at the very end, on a strategy that already shows edge. Pre
 ### 5.1 Multi-symbol diversification
 Add symbols to `DEFAULT_SYMBOLS`. The harness equal-weights them. **Do not** cherry-pick the symbols where the current best looks good — you're fitting the universe.
 
+> **Survivorship-bias caveat.** The data layer only has currently-listed
+> Bybit perps. Adding alts to the universe means the backtest is
+> *survival-conditioned* — symbols that delisted or got ejected aren't
+> there. For a multi-symbol cross-sectional strategy the bias is
+> upward and non-trivial; flag it in `--note` and treat the resulting
+> Sharpe as an upper bound. Single-symbol BTC strategies are unaffected.
+> See [`AGENTS.md`](AGENTS.md) §10d.
+
 ### 5.2 Cross-sectional ranking
 At each bar:
 1. Compute a score per symbol (e.g. 30d return, momentum z-score).

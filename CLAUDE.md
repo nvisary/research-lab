@@ -31,6 +31,11 @@ When the user says "iterate on `<strategy_name>`" or similar:
    hypothesis-family — write a paragraph in `program.md` summarizing what
    was ruled out, and ask the user for a new direction.
 
+## Commit rules
+
+- **Never include a `Co-Authored-By: Claude ...` trailer** in commit
+  messages. Write the message body and stop — no AI co-author line.
+
 ## Rules you cannot break
 
 - Edit only `strategies/<name>/strategy.py` and `strategies/<name>/program.md`.

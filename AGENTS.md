@@ -151,6 +151,82 @@ labeled "08:00" contains data through 11:59) and the audit will reject it.
 
 The harness handles fees, slippage, sizing, splits, metrics. You decide *what* to hold and *when*.
 
+### 4a. Position sizing semantics
+
+What `position[i]` means depends on the strategy's sizing mode:
+
+**Default (legacy, no flags set):**
+- `position[i] ∈ [-1, +1]` is "fraction of an equal-weight slot".
+- Internally `size[i] = position[i] / n_symbols` is passed to vectorbt
+  as `targetpercent`.
+- `position = +1` on a single symbol → that symbol gets `1/n_symbols`
+  of equity. All `n` symbols at +1 → 100% allocated equal-weight.
+- Natural for cross-sectional baskets and trend-following on a basket.
+
+**Raw mode (`RAW_SIZING = True` at module level):**
+- `position[i]` is "fraction of TOTAL equity" directly. `position = 0.5`
+  on a single symbol means 50% of the account in that symbol.
+- Natural for **Kelly sizing**, single-asset strategies, or any agent
+  that thinks in absolute equity fractions.
+- Multi-asset users should ensure `sum(|position|) ≤ 1` — see leverage
+  caveat below.
+
+**Per-asset clip (`MAX_POSITION = 1.0` at module level):**
+- The harness clips `position` to `[-MAX_POSITION, +MAX_POSITION]`
+  before passing to vectorbt. Default is 1.0 (no per-asset
+  oversizing).
+- Useful when raw-mode Kelly suggests `f* > 1` for a single asset.
+  Setting `MAX_POSITION = 2.0` lets the agent emit `1.5` without it
+  being silently clipped to 1.0.
+
+**Leverage cap — vectorbt limitation:**
+- This harness uses `cash_sharing=True` and the installed vectorbt
+  version has no `leverage` argument on `Portfolio.from_orders`.
+  Total portfolio exposure is therefore **structurally capped at 100%
+  of equity** regardless of `MAX_POSITION`.
+- Raising `MAX_POSITION` above 1.0 only matters in **single-asset or
+  sparse multi-asset** setups where one asset can take the whole
+  budget — it doesn't enable true cross-sectional > 100% leverage.
+- For full Kelly with leverage > 1×, a different vectorbt build (with
+  margin support) or a different engine would be required.
+
+**Kelly sizing: how to write it correctly.**
+
+```python
+# Single-asset full Kelly, MAX_POSITION lifted to allow oversizing:
+RAW_SIZING = True
+MAX_POSITION = 2.0   # allow up to 2× per asset (vbt still caps total at 100%)
+
+def generate_signals(data, params):
+    df = data["BTCUSDT"]
+    edge = ...                                  # expected per-bar return
+    var  = ...                                  # variance estimate
+    kelly_fraction = (edge / var).clip(-2.0, 2.0)   # full Kelly, capped at MAX_POSITION
+    pos = kelly_fraction.shift(1).fillna(0.0)
+    return pd.DataFrame({"timestamp": df.index, "symbol": "BTCUSDT",
+                          "position": pos.values})
+```
+
+```python
+# Multi-asset Kelly basket, sum stays under 100%:
+RAW_SIZING = True
+
+def generate_signals(data, params):
+    rows = []
+    n = len(data)
+    for sym, df in data.items():
+        kelly = (edge_of(df) / var_of(df)).clip(-1/n, 1/n)  # cap each at 1/n
+        rows.append(pd.DataFrame({
+            "timestamp": df.index, "symbol": sym,
+            "position": kelly.shift(1).fillna(0.0).values,
+        }))
+    return pd.concat(rows, ignore_index=True)
+```
+
+If you set neither `RAW_SIZING` nor `MAX_POSITION`, you get the legacy
+equal-weight-slot semantics — **all existing strategies in the repo
+work unchanged**.
+
 ---
 
 ## 5. Hard rules — violations are cheating

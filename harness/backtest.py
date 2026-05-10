@@ -161,9 +161,18 @@ def _augment_trades_with_capacity(trades: pd.DataFrame,
 
 
 def _positions_to_wide(signals: pd.DataFrame, symbols: list[str],
-                       index: pd.DatetimeIndex) -> pd.DataFrame:
+                       index: pd.DatetimeIndex,
+                       max_position: float = 1.0) -> pd.DataFrame:
     """Convert long-format [timestamp, symbol, position] into wide DataFrame
-    (index=time, columns=symbols, values=target position in [-1,1])."""
+    (index=time, columns=symbols, values=target position clipped
+    to [-max_position, +max_position]).
+
+    ``max_position`` defaults to 1.0 (legacy behavior). Strategies may
+    override via the ``MAX_POSITION`` module attribute — useful for
+    Kelly sizing where a single-asset position can exceed 100% of an
+    equal-weight slot. Note: total portfolio exposure remains capped at
+    100% by vectorbt's cash_sharing config regardless.
+    """
     if signals.empty:
         return pd.DataFrame(0.0, index=index, columns=symbols)
 
@@ -172,24 +181,38 @@ def _positions_to_wide(signals: pd.DataFrame, symbols: list[str],
     wide = s.pivot_table(index="timestamp", columns="symbol", values="position",
                          aggfunc="last")
     wide = wide.reindex(index=index, columns=symbols)
-    wide = wide.ffill().fillna(0.0).clip(-1.0, 1.0)
+    wide = wide.ffill().fillna(0.0).clip(-max_position, max_position)
     return wide
 
 
 def _run_vectorbt(prices: pd.DataFrame, target_pos: pd.DataFrame,
                   costs=DEFAULT_COSTS, init_cash: float = 10_000.0,
-                  volumes: pd.DataFrame | None = None):
+                  volumes: pd.DataFrame | None = None,
+                  raw_sizing: bool = False):
     """Run a vectorbt portfolio from target position weights.
 
-    `target_pos` columns must match `prices` columns. Equal-weight sizing across
-    symbols (each column gets `init_cash / n_symbols` notional × position).
+    Two sizing modes:
 
-    Slippage is built via ``build_slippage_matrix``: scalar in static
-    mode (vectorbt fast path) or per-bar DataFrame in dynamic mode.
+    - **default (``raw_sizing=False``):** ``size = target_pos / n_symbols``.
+      ``position[i] = +1`` means asset ``i`` gets ``1/n`` of equity. All
+      symbols at +1 → 100% equity allocated equal-weight. Natural for
+      cross-sectional baskets and trend-following on a basket. Backward
+      compatible with all legacy strategies.
+
+    - **raw (``raw_sizing=True``):** ``size = target_pos`` directly.
+      ``position[i] = +0.5`` means asset ``i`` gets 50% of equity.
+      Natural for single-asset Kelly or any agent that wants to think
+      in terms of "fraction of equity" per asset. Multi-asset users
+      should ensure ``sum(|position|) <= 1`` to avoid hitting
+      cash_sharing's implicit no-leverage cap.
+
+    Slippage is built via ``build_slippage_matrix`` and respects the
+    same notional convention.
     """
     n = prices.shape[1]
-    size = target_pos / n  # share of total equity per symbol
-    slippage = build_slippage_matrix(prices, volumes, target_pos, init_cash, costs)
+    size = target_pos if raw_sizing else target_pos / n
+    slippage = build_slippage_matrix(prices, volumes, target_pos, init_cash, costs,
+                                       raw_sizing=raw_sizing)
     pf = vbt.Portfolio.from_orders(
         close=prices,
         size=size,
@@ -239,6 +262,11 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     if not data:
         return {"train": {}, "oos": {}, "error": "no data"}
 
+    # Sizing-mode flags read from the strategy module (defaults preserve
+    # legacy behavior for existing strategies that don't set them).
+    raw_sizing = bool(getattr(strategy_mod, "RAW_SIZING", False))
+    max_position = float(getattr(strategy_mod, "MAX_POSITION", 1.0))
+
     raw_prices = pd.concat({s: df["close"] for s, df in data.items()}, axis=1)
     raw_prices = raw_prices.dropna(how="all")
     symbols_present = list(raw_prices.columns)
@@ -260,7 +288,8 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     n_stale = int(stale_mask.sum().sum())
 
     signals = strategy_mod.generate_signals(data, params)
-    target = _positions_to_wide(signals, symbols_present, prices.index)
+    target = _positions_to_wide(signals, symbols_present, prices.index,
+                                  max_position=max_position)
     # Force flat on stale bars: closes any open position at the last known
     # price and prevents re-entry while data is still missing.
     target = target.where(~stale_mask.reindex_like(target).fillna(False), 0.0)
@@ -275,7 +304,8 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     if split.train_start in target.index or (target.index < split.train_start).any():
         target.loc[target.index < split.train_start, :] = 0.0
 
-    pf = _run_vectorbt(prices, target, costs=costs, volumes=raw_volumes)
+    pf = _run_vectorbt(prices, target, costs=costs, volumes=raw_volumes,
+                        raw_sizing=raw_sizing)
 
     try:
         # See _build_standardized_trades: pf.positions gives one row per

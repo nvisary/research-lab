@@ -81,7 +81,8 @@ DEFAULT = CostModel()
 # --------------------------------------------------------------------------- #
 def build_slippage_matrix(prices: pd.DataFrame, volumes: pd.DataFrame | None,
                           target_pos: pd.DataFrame, init_cash: float,
-                          costs: CostModel) -> pd.DataFrame | float:
+                          costs: CostModel,
+                          raw_sizing: bool = False) -> pd.DataFrame | float:
     """Per-bar, per-symbol slippage rate (FRACTIONAL, e.g. 0.0005 = 5 bps).
 
     Returns either a scalar fraction (static mode, for vectorbt
@@ -142,13 +143,14 @@ def build_slippage_matrix(prices: pd.DataFrame, volumes: pd.DataFrame | None,
         )
         depth_usd = depth_usd.replace(0, np.nan).ffill().bfill()
 
-        # Approximate per-bar order size in $. ``init_cash / n`` is the
-        # nominal per-symbol slot; |Δtarget| is the rebalance fraction.
-        # Doesn't model post-PnL equity drift — good enough for cost
-        # ranking, intentionally biased slightly low (better understated
-        # size impact than overstated total slippage stacking).
+        # Approximate per-bar order size in $. In default sizing
+        # ``init_cash / n`` is the nominal per-symbol slot and
+        # |Δtarget| is the rebalance fraction. With ``raw_sizing=True``
+        # the position field is already a fraction of total equity, so
+        # the slot multiplier is ``init_cash`` directly.
         position_change = target_pos.diff().abs().fillna(target_pos.abs())
-        order_size_usd = position_change * (init_cash / n)
+        slot_usd = init_cash if raw_sizing else (init_cash / n)
+        order_size_usd = position_change * slot_usd
 
         size_bps = costs.slippage_size_k * (order_size_usd / depth_usd) * 1e4
         size_bps = size_bps.clip(upper=costs.size_impact_cap_bps).fillna(0.0)

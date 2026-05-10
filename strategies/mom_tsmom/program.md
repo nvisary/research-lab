@@ -100,6 +100,58 @@ User asks revisited:
 - **Basket shrinkage to top-3** — sample size collapses (8 trades on 24mo).
 - **Conviction sizing** — small signals were valuable, not noise.
 
+## Round 2 (post-fresh-baseline, with new harness capabilities)
+
+After harness gained RAW_SIZING, MAX_POSITION, and rich diagnostics
+flags, we reset history and re-baselined on the previous champion
+(asymmetric long=14d short=30d, ema_smooth=3, basket=10). Then 10
+iters with the new tools.
+
+| iter | hypothesis | verdict | composite |
+|---|---|---|---|
+|  1 | baseline = previous champion | KEEP | **+0.46** |
+|  2 | RAW_SIZING parity check (per-asset 1/n) | REVERT | +0.46 (identical — RAW math correct) |
+|  3 | RAW + vol-target 1pct/day per leg | REVERT | +0.40 (DD ↓ 11.3pct→6.6pct, sharpe ↓) |
+|  4 | vol-target 1.5pct (softer) | REVERT | +0.35 |
+|  5 | RAW + conviction `tanh(ret*5)` | REVERT | −0.24 (tanh shrinks avg size) |
+|  6 | shrink basket to top-5 | REVERT | −0.86 (only 8 OOS trades) |
+|  7 | RAW + slot=20pct + MAX_POS=0.3 | REVERT | +0.33 (DD↑ 17.9pct, fat-tail 50pct) |
+|  8 | BTC-led regime gate (30d) | REVERT | −0.84 (DSR flagged ↓0.23 by diagnostics) |
+|  9 | short_lookback fine-tune 30→25 | REVERT | −0.40 |
+| 10 | ema_smooth fine-tune 3→4 | REVERT | +0.10 |
+
+**Champion remains iter 1** (composite +0.46, OOS Sharpe +1.35, DSR 0.86).
+
+### What's been ruled out (Round 2)
+
+- **Vol-targeted sizing** (1.0–1.5pct daily target): reduces DD but
+  proportionally cuts edge. Equal-weight basket already self-diversifies
+  via uncorrelated alts; risk-equalising doesn't add alpha here.
+- **Conviction sizing** (tanh of momentum): bounded shape shrinks
+  typical |ret|*5 below 1, so most positions become smaller, hurting
+  capture of the strong trends TSM relies on.
+- **Basket shrinkage** (5 majors): trade count collapses, sample-size
+  punishes composite via penalty + fat-tail dependence rises.
+- **Per-signal slot oversizing** (20pct/signal with MAX_POSITION=0.3):
+  blew DD up to 17.9pct, fat-tail dependency to 50pct — concentration
+  risk overwhelmed any benefit.
+- **BTC-led regime gate** (30d sign): cuts too many entries; hurt
+  composite by 1.3 points and triggered DSR-decay diagnostic flag.
+- **Fine-tune short_lookback** (25 between 21-revert and 30-champion):
+  monotone — 30 is the sweet spot.
+- **Fine-tune ema_smooth** (4 between 3 and 5-revert): 3 is sweet spot.
+
+### Lesson
+
+The new diagnostic flags (especially "DSR down from peak" and
+"sharpe_gap W_X > 1.0") fired correctly on bad iters and would have
+been visible after each iter — confirms the diagnostics-as-self-check
+loop the agent was given works as intended.
+
+The champion appears to be near a genuine local optimum on this
+universe + period. Further iteration is likely overfit harvest, not
+edge improvement. Run CPCV before treating it as worth deploying.
+
 ## Open questions
 
 - Lookback sweep — 7 / 14 / 30 / 60 / 90 days

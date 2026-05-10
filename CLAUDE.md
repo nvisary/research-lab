@@ -21,8 +21,12 @@ When the user says "iterate on `<strategy_name>`" or similar:
    never multi-change unless the user explicitly says so. Use
    `harness.utils.resample_higher` for any multi-TF logic.
 4. **Run:** `uv run python -m runner.iterate strategies/<name> --note "<one-sentence hypothesis>"`
-5. **Read the verdict JSON.** Report `composite`, OOS sharpe, max DD,
-   trades, DSR, and what changed since the previous best.
+5. **Read the verdict JSON — including `diagnostics`.** Report `composite`,
+   OOS sharpe, max DD, trades, DSR, and what changed since the previous best.
+   The `diagnostics` block surfaces per-window train/oos gaps, DSR trajectory,
+   monthly streaks, fat-tail checks, and one-line `flags` (✓/⚠/✗/ℹ). **Always
+   scan `flags` first** — they catch selection-bias, single-window-dominance,
+   and lossy-month patterns the aggregate metrics hide.
 6. **Decide.** If verdict is `KEEP` or `BASELINE`, propose the next
    hypothesis in light of the new shape. If `REVERT`, the file has been
    restored — do NOT re-edit on top, re-read first. If `LOOKAHEAD_BUG`,

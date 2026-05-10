@@ -560,6 +560,25 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "capacity_warning": capacity_warning,
         "error": error,
     }
+
+    # Rich diagnostics — best-effort. Surfaces per-window shape, DSR
+    # trajectory, monthly streaks, fat-tail checks, and one-line flags
+    # the agent should scan after each iter. See harness/diagnostics.py.
+    try:
+        from harness import diagnostics as diag_mod
+        summary["diagnostics"] = diag_mod.build_diagnostics(
+            iter_id, runs, summary, result, dsr_value,
+        )
+        # Persist for retroactive review.
+        diag_dir = runs / "diagnostics"
+        diag_dir.mkdir(exist_ok=True)
+        (diag_dir / f"iter_{iter_id:04d}.json").write_text(
+            json.dumps(summary["diagnostics"], indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        # Diagnostics are optional context; don't fail the iter on a bug here.
+        traceback.print_exception(type(e), e, e.__traceback__)
     return summary
 
 
@@ -615,8 +634,14 @@ def main() -> None:
         audit_mode=args.audit,
         audit_k=args.audit_k,
     )
+    # Force UTF-8 on stdout so the diagnostics flag glyphs (✓/⚠/✗/ℹ)
+    # render readable instead of escaped \uXXXX. Windows cp1252 console
+    # is the typical caller; the buffer wrap is a no-op elsewhere.
+    import io
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     out = run_one(Path(args.strategy_dir), cfg, note=args.note)
-    print(json.dumps(out, indent=2))
+    print(json.dumps(out, indent=2, ensure_ascii=False))
     if out.get("error"):
         sys.exit(2)
 

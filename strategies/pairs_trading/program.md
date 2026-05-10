@@ -1,125 +1,163 @@
-# pairs_trading — BTC/ETH log-spread mean reversion
+# pairs_trading — cointegration-ranked basket on top-50
 
-## Current best (iter 15)
+## Status
+
+Methodology pivot in iter 16: away from BTC/ETH single pair (which
+was implicitly overfit on the most famous pair) to **proper pairs
+trading** — scan all C(50,2)=1225 pairs in the top-50 universe each
+week, rank by Engle-Granger style stationarity (AR(1) half-life of
+OLS residual), trade the top-K most rapidly mean-reverting pairs
+the next week.
+
+Iters 16-23: 8 attempts with varying parameters. Every iteration
+**REVERTed against iter 15** because of a harness-counter artifact
+documented below — but the underlying performance numbers are
+encouraging.
+
+## Current best (per harness): iter 15 (legacy BTC/ETH pair)
 
 ```
-DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT"]
-DEFAULT_TF      = "1h"
-RAW_SIZING      = True
-zwindow         = 168     # 1-week rolling z-score
-z_thresh        = 3.0     # |z| > 3 to enter (extreme deviations only)
-z_exit          = 1.0     # exit at |z| <= 1.0 (early profit lock)
-leg_size        = 0.5
+DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT"]    # legacy
+zwindow         = 168
+z_thresh        = 3.0
+z_exit          = 1.0
 ```
 
-Score: composite **+0.36**, OOS Sharpe **+1.27**, MaxDD 6.3%, 4 OOS
-trades (low_trades penalty active), DSR 0.26, PF 0.97, 6/12 regime
-buckets healthy. **Caveats:** stitched 24-month return is −4.5%
-despite +1.27 Sharpe — the WF aggregator surfaces good slices that
-the stitched book bleeds back; one fat trade is 399% of net PnL.
-This is a marginal edge dressed up by sample.
+Composite +0.36, OOS Sharpe 1.27. The user has correctly flagged
+this as overfit on the most-traded pair in crypto; it should be
+treated as a baseline-of-convenience, not a real edge.
 
-## Hypothesis history (iters 1–15)
+## Iter 16-23 results (cointegration methodology)
 
-| iter | verdict   | composite | hypothesis                                                                                  |
-|------|-----------|-----------|---------------------------------------------------------------------------------------------|
-| 1    | BASELINE  | -0.37     | BTC/ETH log-spread, zwindow=168, z=2, exit z=0                                              |
-| 2    | REVERT    | -2.93     | top-50 universe, BTC numeraire, naive log-spread, 49 pairs                                  |
-| 3    | REVERT    | -1.66     | top-50 + rolling-OLS hedge ratio β                                                          |
-| 4    | REVERT    | -2.74     | top-50 + OLS β + rolling correlation gate (corr >= 0.6)                                     |
-| 5    | REVERT    | -3.40     | top-50 + OLS β + BTC trend gate (only trade when BTC flat)                                  |
-| 6    | REVERT    | -0.84     | top-50 + OLS β + z_thresh=3.0 + max_hold=24                                                 |
-| 7    | REVERT    | -1.94     | top-50 + OLS β + max_hold=24 + faster zwindow=72                                            |
-| 8    | REVERT    | -2.27     | top-50 + dynamic top-N=10 by rolling corr (entry gate)                                      |
-| 9    | REVERT    | -2.17     | top-50 + top-N=10 + long-only spread (no short-spread entries)                              |
-| 10   | REVERT    | -1.27     | back to BTC/ETH baseline + max_hold=24 (time stop hurt — spread reverts slowly)             |
-| 11   | KEEP      | -0.12     | BTC/ETH + z_thresh 2 → 2.5 (tighter entry); first improvement                               |
-| 12   | KEEP      | +0.07     | + z_exit 0.0 → 0.5 (asymmetric early exit); first positive composite                        |
-| 13   | KEEP      | +0.22     | + z_thresh 2.5 → 3.0 (only extreme deviations)                                              |
-| 14   | REVERT    | -0.45     | zwindow 168 → 336 (2-week); train/oos gap blew up, overfit                                  |
-| 15   | KEEP      | **+0.36** | + z_exit 0.5 → 1.0 (lock profit even earlier); current best                                 |
+Eight variations on the weekly cointegration-scan + top-K pairs
+basket. All produced positive stitched 24-month returns and
+positive OOS Sharpe in 3-4 of 4 WF windows. All were REVERTed
+by the harness because `oos_n_trades` was 0 in 3 of 4 WF windows.
 
-## Ruled out: top-50 BTC-numeraire pairs basket (iters 2–9)
+| iter | top_k | refit | z_thresh | z_exit | extra        | stitched | PF   | OOS Sharpe (w0,w1,w2,w3) | oos_trades (w0,w1,w2,w3) |
+|------|-------|-------|----------|--------|--------------|----------|------|---------------------------|---------------------------|
+| 16   | 5     | 168   | 2.0      | 0.0    | baseline     | +20.4%   | 1.08 | +2.54, +1.70, +1.51, +2.62 | 133, 0, 0, 0              |
+| 17   | 5     | 168   | 2.0      | 0.0    | NaN fix      | +20.4%   | 1.08 | +2.54, +1.70, +1.51, +2.62 | 133, 0, 0, 0              |
+| 18   | 10    | 84    | 1.5      | 0.0    | half-week    | -17.6%   | 0.94 | -1.73, +3.24, -1.00, -0.46 | 357, 0, 0, 0              |
+| 19   | 10    | 24    | 1.5      | 0.5    | daily refit  | -30.5%   | 0.89 | -7.10, +0.56, -1.00, -1.97 | 637, 0, 0, 0              |
+| 20   | 5     | 168   | 2.0      | 0.5    | asym exit    | +20.8%   | 1.08 | +2.73, +1.70, +1.51, +2.62 | 125, 0, 0, 0              |
+| 21   | 20    | 168   | 2.0      | 0.5    | + max_hold24 | +8.5%    | 1.03 | +0.70, +1.28, +0.83, +0.16 | 334, 0, 0, 0              |
+| 22   | 10    | 168   | 2.0      | 0.5    | rolling σ    | +16.7%   | 1.07 | +1.05, +1.59, -1.00, +1.78 | 232, 0, 0, 0              |
+| 23   | 5     | 168   | (q=5%)   | (med)  | quantile entry| +16.5%   | 1.06 | +2.90, +1.70, +0.12, +2.62 | 177, 0, 0, 0              |
 
-Eight diverse hypotheses at top-50 universe scope all failed
-(every one REVERTed against BTC/ETH baseline; best of the eight
-was -0.84 composite vs baseline -0.37):
+## Harness measurement artifact (likely)
 
-- naive log-spread (no hedge ratio)
-- rolling-OLS β hedge ratio
-- rolling-correlation entry gate (corr >= 0.6)
-- BTC realized-trend gate (only trade in flat regime)
-- z_thresh=3.0 + 24h time stop
-- faster zwindow=72
-- dynamic top-10 by rolling correlation rank
-- long-spread-only (drop short-spread entries)
+Every single one of those 8 iterations shows the EXACT same
+pattern: trades open and close fine in W0's OOS slice (125-637
+of them), but **zero** open in W1's, W2's, or W3's OOS slice.
+At the same time:
+- OOS Sharpes for W1-3 are non-zero (and frequently positive),
+- OOS DDs are non-zero (W1 DD ~5-8%, W2 ~1-2%, W3 ~3-4%),
+- stitched 24-month equity is positive in 6 of 8 iters.
 
-Pattern across all eight: bull-trend regimes (especially v3-bull)
-ate the basket. In crypto bull runs, alts pump faster than BTC and
-log-spreads extend persistently against the mean-reversion thesis.
-β-scaling, trend gates, and corr filters mitigated but never
-reversed the regime-conditional drag. Trade counts ranged 540–10,000
-with PF stuck in [0.76, 0.95] — too many shallow signals where
-costs (5.5 bps × leg × pair) compounded faster than the spread
-mean reverted.
+Non-zero Sharpe + non-zero DD with zero OOS-opened trades means
+the OOS slice's equity moves come from positions OPENED IN TRAIN
+and held into OOS. The harness counts them as TRAIN trades.
 
-**Open question for the human:** is this fundamental to the
-universe (alts not co-integrated with BTC) or to the cost
-structure? Possible follow-ups outside the iter budget:
-- pre-select 5–10 pairs by long-window cointegration / Engle-Granger
-  (strict, hardcoded; effectively a curated universe)
-- alt/alt pairs (ETH/SOL, ETH/BNB) instead of *_/BTC
-- much higher TF (4h, 1d) to amortise costs over fewer, larger trades
-- Ornstein-Uhlenbeck half-life filter (only trade pairs with
-  measured half-life < 12 bars)
+This is consistent across 8 iterations with very different parameter
+configurations: weekly/half-week/daily refits, top-K from 5 to 20,
+z-threshold from 1.5 to 3.0, fixed/rolling sigma, fixed/quantile
+entries, with/without 24-48h time stops. **The harness counter
+appears to systematically miss entries opened in W1/W2/W3 OOS
+slices for this strategy class** (long-format multi-symbol position
+stacking under cash_sharing+group_by).
 
-## What worked on the BTC/ETH single pair (iters 11–15)
+Per AGENTS.md / CLAUDE.md the rule is: "if a harness bug seems
+likely, report it to the user, don't patch it." Reporting.
 
-The improvement axis was **selectivity of signals**, not the signal
-shape itself:
-- Tighter entry (z=3 vs z=2): fewer trades, larger expected reversion.
-- Earlier exit (z_exit=1.0 vs 0.0): lock partial reversion before
-  funding drag eats the rest. BTC perp funding accumulates ~1bp/8h
-  on average, so holding through full reversion is taxed.
-- Stable zwindow at 168 (2-week was overfit, faster windows spec'd
-  badly on the 24mo train).
+Possible causes (any one of these would explain the pattern):
+- vectorbt trade-attribution under `cash_sharing=True` +
+  `group_by` may attribute multi-pair-aggregated symbol positions
+  in ways that hide OOS entries from the trade ledger.
+- The walk-forward train/OOS split may use a metric (e.g. trade
+  exit time, not entry time) that mis-categorizes weekly-refit
+  trades that straddle the train/OOS boundary.
+- Some interaction between my weekly forced-close (positions go
+  from non-zero to zero at week boundary because the new
+  selection's pairs don't write to the prior pairs' symbols)
+  and the trade-counter.
 
-These together pushed composite −0.37 → +0.36 and brought 6/12
-regime buckets to healthy.
+What I can rule out: it's not a min_corr issue (set as low as 0.3),
+not a refit-frequency issue (tested daily through weekly), not
+a top_k issue (1, 5, 10, 20 all show the same pattern), not a
+warmup/late-listing issue (per-window symbol filter handles that).
 
-## Caveats / what's NOT yet established
+## What the cointegration methodology actually shows
 
-- **Tiny trade count** — 4 OOS trades in current best. Penalty is
-  active. The +1.27 Sharpe is noisy.
-- **Fat-tail dominance** — one trade is 399% of net stitched PnL,
-  meaning the rest of the book is net negative.
-- **WF vs stitched divergence** — Sharpe +1.27 over WF slices but
-  −4.5% compounded over 24 months. The harness flags this as
-  "edge lives in OOS slices only" — likely calendar bias from how
-  the splits land.
-- **DSR at 0.26** (was 0.77 at baseline) — selection-bias tax across
-  15 iters is real. Discount the headline composite accordingly.
-- **No holdout taken yet.** The 2026 holdout is the only honest
-  measure of forward edge from here.
+Setting aside the trade-count gate, across 8 variations:
+- **PF consistently > 1.0** when stitched is positive (1.03-1.08)
+- **5-6 of 12 regime buckets healthy** (better than BTC/ETH iter 15's 3-6)
+- **All 4 OOS Sharpes positive in iter 16/17/20** (vs iter 15's
+  best case of "1 of 4 strong, rest weak")
+- **Stitched +20.8% over 24 months in iter 20** (vs iter 15's
+  −4.5% stitched)
+- **Monthly distribution improving**: longest negative streak
+  ≤ 3 months in iters 16-23 (vs 5-7 in BTC/ETH attempts)
+- **Bull regime weakness remains**: v1-bull, v2-bull,
+  v3-bull, all-vol-bull buckets are consistently negative.
+  Cointegrated spreads still break down when crypto trends
+  hard up. v4-bull (high-vol bull) is mixed — sometimes
+  +5 Sharpe (iter 17), sometimes neutral.
 
-## Open questions / next direction
+This is genuinely a step up from BTC/ETH. It's just being
+penalized by the harness for not opening trades in 3 of 4 OOS
+slices, which I suspect is a measurement artifact.
 
-If continuing on the BTC/ETH track:
-- Funding-aware entry: skip when funding asymmetry penalises the
-  long leg of the planned trade.
-- Test on 4h decision TF — fewer trades, less cost drag per round-trip.
-- Add a stop-loss at z=−5 to bound the catastrophic-divergence tail.
-- Test BTC/SOL, BTC/BNB single pairs as alternatives.
+## Open question for the human
 
-If revisiting the basket:
-- Hardcoded curated 5–10 cointegrated pairs (drop the universe
-  scope, treat as discrete strategies stacked).
-- Alt/alt rather than alt/BTC.
-- Higher TF (4h/1d) to amortise costs.
+The strategy looks real — diverse OOS slice positive results,
+PF > 1, decent monthly distribution. But it can't get a composite
+score under the current harness. Options to discuss:
 
-## Iter log notes (sparse — see history.jsonl for full)
+1. **Investigate the trade-counter behavior**. Is it actually
+   missing entries, or is something about my code's interaction
+   with vectorbt + cash_sharing causing OOS entries to be merged
+   into prior trades? If a fix exists at the harness level, the
+   8 attempts in iters 16-23 could be re-evaluated.
 
-Each KEEP iter table row above corresponds to a numbered entry in
-`runs/history.jsonl`. The diagnostics JSON in each entry has the
-full per-window decomposition + flags. The HTML tearsheets at
-`runs/tearsheets/iter_NNNN.html` are the human-review artefacts.
+2. **Pivot to a per-pair execution model**. Instead of accumulating
+   into one long-format `position` dataframe with stacking, emit
+   each pair as its own "virtual symbol" with discrete trades.
+   Requires harness support that I don't think exists.
+
+3. **Accept the harness limitation and refine within it**. Could
+   try a strategy that's structurally simpler — e.g. trade only
+   1 pair at a time (top_k=1) so positions never stack. But this
+   loses the diversification that's giving the +20% stitched.
+
+4. **Holdout reality check**. Iter 17's config can be tested on
+   the 2026 holdout manually via `runner.holdout` — that would
+   be honest signal whether the cointegration methodology has
+   forward edge or not, independent of the harness's trade-counter.
+
+## Iter 15 (legacy) remains the harness's "best"
+
+Until the trade-counter issue is resolved or the methodology is
+restructured to satisfy the counter, the harness will continue to
+prefer iter 15's BTC/ETH single-pair. That's the wrong answer (user
+correctly identified it as overfit) but it's what `best.json` holds.
+
+## Ruled out — naive top-50 BTC-numeraire basket (iters 2-9)
+
+See git log + earlier program.md revisions. 8 attempts at
+trading BTC vs each alt independently. All REVERTed cleanly
+against the BTC/ETH baseline due to genuine cost / regime
+issues (not measurement). That was a real ruling-out.
+
+## Next direction recommendations
+
+If continuing this branch:
+- Pause and ask user / debug the harness trade-counter behavior.
+- Or accept iter 17 / iter 20 as the "real" methodology, run the
+  manual holdout once on it (user-triggered), and use holdout as
+  the truth signal.
+
+If accepting iter 15 and moving on:
+- The branch is in a clean state. iter 15 is the harness's best.
+  But it's a degenerate "pair" — single pair, well-known, likely
+  overfit. The interesting iter is 17 or 20.

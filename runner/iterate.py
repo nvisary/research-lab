@@ -76,6 +76,13 @@ class IterationConfig:
     dd_penalty: float = 0.5
     min_trades: int = 50
     low_trades_penalty: float = 0.5
+    # Time-in-position floor: percent of bars where at least one symbol
+    # has a non-zero position. Below this floor the composite is
+    # penalized linearly up to ``time_in_position_penalty`` at 0%.
+    # Blocks Sharpe-inflation gaming where the agent learns to sit in
+    # cash (low variance) to get a deceptively high Sharpe/low DD.
+    min_time_in_position: float = 20.0
+    time_in_position_penalty: float = 1.0
     epsilon: float = 0.01            # composite must beat best by this to keep
     # Lookahead audit:
     #   "once"   — run when strategy.py's sha256 changed since last passing audit
@@ -385,11 +392,15 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             min_trades=cfg.min_trades,
             low_trades_penalty=cfg.low_trades_penalty,
             stability_penalty=cfg.stability_penalty,
+            min_time_in_position=cfg.min_time_in_position,
+            time_in_position_penalty=cfg.time_in_position_penalty,
         )
         oos = {
             "sharpe": wf_agg["mean_sharpe"],
             "max_dd": wf_agg["worst_max_dd"],
             "n_trades": int(wf_agg["mean_n_trades"]),
+            "pct_time_in_position": wf_agg.get("mean_pct_time_in_position"),
+            "total_return": wf_agg.get("mean_total_return"),
         }
     else:
         oos = result.get("main", {}).get("oos", {}) or {}
@@ -399,6 +410,8 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             dd_penalty=cfg.dd_penalty,
             min_trades=cfg.min_trades,
             low_trades_penalty=cfg.low_trades_penalty,
+            min_time_in_position=cfg.min_time_in_position,
+            time_in_position_penalty=cfg.time_in_position_penalty,
         ) if oos and not error else float("-inf")
 
     # DSR: concatenate OOS returns across whatever windows ran, run deflated
@@ -650,6 +663,11 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "oos_sharpe": round(oos.get("sharpe", 0.0), 4),
         "oos_max_dd": round(oos.get("max_dd", 0.0), 4),
         "oos_n_trades": oos.get("n_trades", 0),
+        "oos_pct_time_in_position": (round(oos.get("pct_time_in_position"), 2)
+                                      if oos.get("pct_time_in_position") is not None
+                                      else None),
+        "oos_total_return": (round(oos.get("total_return"), 4)
+                              if oos.get("total_return") is not None else None),
         "dsr": round(dsr_value, 4),
         "max_participation_pct": (round(cap_max, 2) if cap_max is not None else None),
         "capacity_warning": capacity_warning,

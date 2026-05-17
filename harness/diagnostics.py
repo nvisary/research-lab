@@ -498,6 +498,32 @@ def _flags(diag: dict, summary: dict) -> list[str]:
     elif n_trades == 0:
         flags.append("✗ 0 OOS trades — composite forced to -inf")
 
+    # --- Time-in-position floor (anti-Sharpe-inflation) ---
+    # When the strategy sits in cash most of the time, Sharpe inflates
+    # via collapsing variance ("mean / std" both shrink, ratio can blow
+    # up on micro-drift). This flag surfaces the failure mode the same
+    # way the composite penalizes it: linear from 20% down.
+    tip = summary.get("oos_pct_time_in_position")
+    if tip is not None:
+        if tip < 5.0:
+            flags.append(
+                f"✗ pct_time_in_position {tip:.1f}% < 5% — strategy almost "
+                f"never positioned; Sharpe is variance-collapse artifact")
+        elif tip < 20.0:
+            flags.append(
+                f"⚠ pct_time_in_position {tip:.1f}% < 20% — low activity, "
+                f"composite penalty active, Sharpe sensitive to inflation")
+
+    # Sharpe-inflation pattern: high Sharpe + near-zero OOS total return.
+    # A genuinely-positive-Sharpe strategy compounds; if Sharpe>1 and
+    # 24mo OOS total return is rounding error, the Sharpe came from
+    # variance collapse, not edge.
+    oos_ret = summary.get("oos_total_return")
+    if oos_ret is not None and sh > 1.0 and abs(oos_ret) < 0.01:
+        flags.append(
+            f"⚠⚠ OOS Sharpe {sh:+.2f} with total_return {oos_ret*100:+.2f}% — "
+            f"Sharpe inflation from low activity (cash-heavy), not real edge")
+
     shape = diag.get("shape", {})
     if shape.get("largest_trade_pct_of_total", 0) > 30:
         flags.append(

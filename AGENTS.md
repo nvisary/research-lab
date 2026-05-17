@@ -244,15 +244,16 @@ work unchanged**.
 ## 6. The score — what you optimize
 
 ```
-composite = oos_sharpe − 0.5 · oos_max_dd − low_trades_penalty
+composite = oos_sharpe − 0.5 · oos_max_dd − low_trades_penalty − time_in_position_penalty
 ```
 
 - `oos_sharpe`: annualized, on the OOS slice (~last 25% of the iter period).
 - `oos_max_dd`: positive fraction (0.10 == 10%).
-- `low_trades_penalty`: `0.5` if `oos_n_trades < 50`, else `0`. `−∞` if `n_trades == 0`.
+- `low_trades_penalty`: graded penalty `0.5 · (1 − sqrt(n / 50))` when `oos_n_trades < 50`, else `0`. `−∞` if `n_trades == 0`.
+- `time_in_position_penalty`: linear penalty `1.0 · (1 − tip / 20)` when `oos_pct_time_in_position < 20%`, else `0`. **This is anti-gaming, not academic.** Without it, the agent can inflate Sharpe by sitting in cash 99% of the time — collapsing variance makes `mean / std` blow up on micro-drift even when actual returns are zero. The floor forces the strategy to *be in the market enough* for its Sharpe to mean what Sharpe is supposed to mean.
 - A new candidate is **KEPT** only if `composite > best.composite + 0.01`.
 
-This score is intentionally simple. It is **not** the truth. It is a rule that biases against high-DD curve-fits and noise-trade strategies. Internalize that there is more to a strategy than Sharpe — see §7.
+This score is intentionally simple. It is **not** the truth. It is a rule that biases against high-DD curve-fits, noise-trade strategies, and Sharpe-inflation-by-inactivity gaming. Internalize that there is more to a strategy than Sharpe — see §7.
 
 ---
 
@@ -266,6 +267,7 @@ A strategy that maximizes composite while failing these is suspect:
 - **Hit rate × payoff ratio** — many strategies survive on 30% hit rate × 3:1 payoff. Verify the regime where the payoff comes from.
 - **Equity curve smoothness** — visual sanity. A single 2025-08-05 outlier is not an edge.
 - **Trade count** — fewer than ~50 trades on 21 months is a sample-size red flag, even after the penalty.
+- **`oos_pct_time_in_position` and `oos_total_return`** — surfaced in every verdict summary. **Read them before celebrating a KEEP.** If `pct_time_in_position < 20%` or `total_return ≈ 0` while Sharpe > 1.0, you are gaming the composite — the strategy is in cash, not in the market. The harness penalizes this directly via `time_in_position_penalty`, but the gaming pattern is structural: every gate that suppresses trades inflates Sharpe via variance collapse. **Always cross-check Sharpe against actual P&L.**
 - **Holdout** (only after you stop iterating) — the truth.
 
 **Computed automatically and shown on the dashboard:**
@@ -330,6 +332,7 @@ technique per iteration and articulate the hypothesis it embodies in `--note`.
 - "It's bad in chop, let me skip chop" expressed as a hard volatility cutoff that happens to mute losing months → calendar overfit in disguise.
 - Tweaking parameters until OOS looks good — that *is* using OOS as train.
 - Reducing leverage to flatter the DD — Sharpe is scale-invariant; you only changed the Y-axis units.
+- **Stacking filters until the strategy barely trades → Sharpe inflates from collapsing variance, total return goes to zero, max DD shrinks because you can't lose what you never put in.** The harness now penalizes `pct_time_in_position < 20%` directly, but the temptation is structural — every time you add a gate that drops `n_trades` more than 30% without proportionally lifting per-trade expectancy, suspect it. **A strategy that "sits in cash 95% of the time" is not a strategy, it's a stopped clock that happens to be right on noise.** Cross-check: if `oos_total_return ≈ 0` and `oos_sharpe > 1`, you are gaming, not winning.
 - Cherry-picking a symbol where current best fails. Same trap.
 - Adding a stop-loss whose specific value happens to clip the worst trade in the period.
 - Using `mean()` where you meant `expanding().mean()` — silent lookahead.

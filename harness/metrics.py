@@ -592,15 +592,27 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
 
 
 def composite_score(metrics: dict, dd_penalty: float = 0.5,
-                    min_trades: int = 50, low_trades_penalty: float = 0.5) -> float:
-    """OOS_Sharpe − λ·MaxDD with smooth low-activity penalty.
+                    min_trades: int = 50, low_trades_penalty: float = 0.5,
+                    min_time_in_position: float = 20.0,
+                    time_in_position_penalty: float = 1.0) -> float:
+    """OOS_Sharpe − λ·MaxDD with low-activity and low-time-in-position penalties.
 
     Below ``min_trades`` we apply a graded penalty
         ``low_trades_penalty * (1 - sqrt(n / min_trades))``
     so a strategy with 49 trades is essentially unpenalized while a strategy
-    with 5 trades pays roughly 2/3 of the full penalty. The previous version
-    was a step function (-0.5 if n<50, 0 otherwise), which created a 0.5-point
-    cliff at exactly 49 trades. n=0 remains ``-∞`` (ineligible).
+    with 5 trades pays roughly 2/3 of the full penalty.
+
+    Below ``min_time_in_position`` (percent of bars with any non-zero position)
+    we apply a linear penalty
+        ``time_in_position_penalty * (1 - tip / min_time_in_position)``
+    so a strategy that sits in cash 95% of the time pays nearly the full
+    penalty. This blocks the "Sharpe-inflation-via-flat-equity" gaming
+    pattern: when ``pct_time_in_position`` collapses, variance also
+    collapses and ``mean / std`` Sharpe inflates on micro-drift. The
+    penalty cliff is intentional — composite is a research filter, not
+    an academic objective.
+
+    n=0 remains ``-∞`` (ineligible).
     """
     import math
     sh = metrics.get("sharpe", 0.0)
@@ -618,6 +630,14 @@ def composite_score(metrics: dict, dd_penalty: float = 0.5,
     if n < min_trades:
         deficit = 1.0 - math.sqrt(n / min_trades)
         score -= low_trades_penalty * deficit
+    # Time-in-position floor. ``pct_time_in_position`` is the fraction
+    # of bars where at least one symbol holds a non-zero position,
+    # expressed as a percentage (0..100). When None (older metric blobs
+    # without this field), skip — no penalty applied.
+    tip = metrics.get("pct_time_in_position")
+    if tip is not None and tip < min_time_in_position:
+        tip_deficit = 1.0 - max(float(tip), 0.0) / float(min_time_in_position)
+        score -= time_in_position_penalty * tip_deficit
     return float(score)
 
 
@@ -625,7 +645,9 @@ def aggregate_wf_composite(window_metrics: list[dict],
                            dd_penalty: float = 0.5,
                            min_trades: int = 50,
                            low_trades_penalty: float = 0.5,
-                           stability_penalty: float = 0.5) -> tuple[float, dict]:
+                           stability_penalty: float = 0.5,
+                           min_time_in_position: float = 20.0,
+                           time_in_position_penalty: float = 1.0) -> tuple[float, dict]:
     """Aggregate a list of per-window OOS metric dicts into a single composite.
 
     score = mean(window_composites) − stability_penalty · std(window_composites)
@@ -642,7 +664,8 @@ def aggregate_wf_composite(window_metrics: list[dict],
     """
     import numpy as np
 
-    composites = [composite_score(m, dd_penalty, min_trades, low_trades_penalty)
+    composites = [composite_score(m, dd_penalty, min_trades, low_trades_penalty,
+                                   min_time_in_position, time_in_position_penalty)
                   for m in window_metrics]
     if not composites or any(c == float("-inf") for c in composites):
         return float("-inf"), {

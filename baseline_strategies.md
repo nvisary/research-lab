@@ -23,8 +23,8 @@ Each entry below preserves:
 
 |                | **Per-asset (TS)**       | **Cross-sectional (XS)**           |
 |----------------|--------------------------|-------------------------------------|
-| **Trend**      | mom_tsmom, trend_supertrend, keltner, keltner_regime_switch | xs_momentum, mom_xsection |
-| **Mean-rev**   | mr_zscore, mr_zscore_meta, bb_rsi_meanrev | mr_xsection                |
+| **Trend**      | mom_tsmom, trend_supertrend, keltner, keltner_regime_switch, donchian_breakout | xs_momentum, mom_xsection |
+| **Mean-rev**   | mr_zscore, mr_zscore_meta, bb_rsi_meanrev, mean_revert | mr_xsection                |
 | **Stat-arb**   | —                        | pairs, pairs_trading                |
 
 ---
@@ -425,6 +425,153 @@ The harness `min_trades=50 → composite=-∞` rule punishes this as failure. Fo
 
 ---
 
+## 13. donchian_breakout — N-bar high/low channel breakout (BTC 1h)
+
+**Thesis.** Classic Turtle-style channel breakout: long when close > prior N-bar
+high, mirror for shorts. Symmetric on perp. Captures pumps and cycle reversals
+on the same mechanism.
+
+**Best config (after 4 batches, ~45 iters):**
+```
+DEFAULT_SYMBOLS = ["BTCUSDT"]
+DEFAULT_TF      = "1h"
+n_break         = 55         # entry channel (Turtle S2)
+m_exit          = 10         # exit channel
+trend_ma        = 100        # EMA trend gate
+atr_n           = 10         # faster ATR (n=14→10 was a KEEP)
+atr_k           = 0.5        # ATR-buffer on entry
+volcap_q        = 0.90       # skip entries when atr/close > expanding-q90
+volcap_min      = 2000       # min_periods (~3mo at 1h)
+vol_conf_n      = 50         # rolling volume baseline
+vol_conf_k      = 1.2        # require breakout-bar vol > k * rolling median
+cme_gap_filter  = 1.0        # skip Sun 22:00 → Mon 04:00 UTC
+stop_k          = 3.5        # fixed ATR stop from entry (k=2.5/4.5 both REVERT)
+```
+
+**Final metrics:** composite −0.325, WF-mean Sharpe +0.73, per-window OOS
+`[+0.72, +2.25, −1.24, +1.21]`, DSR 0.096 (flat across batches 2+3), stitched
+24mo P&L +4.0%, trust-verdict **RED** (perm p=0.52 fail, BHY ≈ 0 fail; sign-agree
+3/4 pass, stitched pass). Plateau confirmed; holdout not consumed.
+
+**What worked (additive, in order of impact):**
+- **Symmetric shorts** via `np.select` priority (iter 11 breakthrough). Long-only
+  cannot survive 2025-Q4 reversal; shorts capture it directly.
+- **Vol-cap entry filter** — `atr/close > expanding-q90` blocks extreme-vol
+  fakeout-prone bars. Interior optimum (q=0.85 too tight, q=0.95 too loose).
+- **Faster ATR (n=14→10)** — quicker vol-cap and ATR-buffer reactivity.
+- **Volume confirmation k=1.2** — diagnostic-driven; W4 losers were
+  thin-volume short-duration fakeouts (vol_ratio 3.15 vs winners 5.59).
+- **CME-gap filter** (Sun 22:00 → Mon 04:00 UTC) — narrow ~3.5% of week-hours,
+  mechanism is real (METHODS.md §2.3).
+- **Fixed ATR stop k=3.5** — wider than typical Chandelier. Cut W3 61h-tail
+  losers (diagnostic showed 2 large single-trade losses dominated W3) without
+  clipping winners. Brittle — k=2.5 and k=4.5 both REVERT.
+
+**Ruled out:**
+- Long-only on BTC 1h (W3 chop + Q4 reversal both unsurvivable single-side).
+- Chandelier trailing stops (k=3, k=5) — BTC 1h trends have routine
+  ATR-pullbacks; trail chops winners.
+- Time stop (120 bars) — dominated by M=10 channel exit at 1h.
+- Vol-target sizing — risk is *direction* not *size* on breakouts.
+- Trend-strength gate `|close-EMA|>1.5·ATR` — false precision in chop.
+- Narrowing entry channel N=55→20 — more entries, worse PF.
+- Symbol expansion BTC+ETH+SOL+BNB and BTC+ETH — correlated bleed in W3.
+- Funding-rate gate (±0.015%, ±0.05%) — asymmetric distribution; cuts longs
+  with no PF lift.
+- Conviction sizing (`|close-EMA|/ATR`) — W3 worst entries are HIGH-conviction
+  breakouts that reverse.
+- Slope-rising gate, EMA(150), weekday-only — all REVERT, mostly TIP penalty.
+- BB-squeeze pre-breakout — flips W3 sign but breaks W1/W2/W4 catastrophically.
+- Channel-center exit — fires near-instantly, TIP collapse to 2.8%.
+- **Regime classifier as hard flat-gate (4h Kaufman ER, ADX, Hurst R/S)** —
+  *structurally refuted* by batch-4 iter-1 diagnostic. Classifiers do not
+  separate W3 OOS from W1/W2/W4 OOS distributions on 4h BTC. Hurst R/S never
+  goes below 0.5 on 4h BTC over 2024-2025; ADX is anti-correlated with
+  profitability (W2 winner has lower ADX than W3 loser).
+
+**Open angles:**
+- 4h EMA(50) trend gate (iter 36) had highest WF-mean +0.43 of any non-KEEP
+  variant but TIP-penalty bit just below 25%. Adjacent to productive if
+  combined with a TIP-restoring change.
+- Within-trade regime detection (fast-MR exit on first counter-move) — never
+  tested; the only structurally untested W3-targeting hypothesis.
+- 15m or 5m decision TF with MTF gates — untested (would require new strategy
+  with cost-discipline rebudgeted).
+- Pullback entries inside higher-TF trend.
+
+**Key lesson.** **Pre-entry regime gates on 4h BTC are refuted** — chop
+signature lives in *realised path*, not forward-observable directional-quality.
+Within-trade or post-entry detection is the only remaining structural lever
+for breakout strategies in chop regimes. Also: when DSR plateaus while
+composite climbs, you are noise-selecting marginal filters; stop.
+
+---
+
+## 14. mean_revert — Bollinger-fade z-score reversion (BTC 1h)
+
+**Thesis.** Symmetric to donchian: complementary mean-reversion strategy on
+the same symbol+TF for ensemble compatibility via `multistrat.py`. Should win
+in chop where donchian loses. Bollinger z-score with extreme entry / mid-band
+exit, vol-targeted sizing.
+
+**Best config (after 1 batch, 15 iters):**
+```
+DEFAULT_SYMBOLS    = ["BTCUSDT"]
+DEFAULT_TF         = "1h"
+bb_n               = 20
+k_entry            = 2.5     # tighter than 2.0 baseline
+k_exit             = 0.30    # near-full-revert exit (breakthrough at 0.25)
+vol_n              = 72      # 3d rolling for daily-vol estimate
+target_daily_vol   = 0.025   # 2.5% daily target
+```
+
+**Final metrics:** composite +1.28 (looks great), WF-mean Sharpe +1.81,
+per-window OOS `[+2.15, +1.63, +0.97, +2.46]` (all positive), DSR 0.75 (high).
+**But:** stitched 24mo P&L **−27.5%**, permutation p-value **1.000**, mean
+train-OOS Sharpe gap **−2.92** (inverse pattern), selection premium 0.85,
+BHY-haircut Sharpe 0.60, monthly win rate 41.7%, total PnL −$3098.
+Trust-verdict **RED — NOISE-FIT**.
+
+**What worked (apparent, not real):**
+- **`k_exit 0.5 → 0.25 → 0.30`** — the biggest composite mover. Holding for
+  near-full revert beats band-touch exit.
+- **`k_entry 2.0 → 2.5`** — more selective entries (composite +0.49).
+- **Vol-targeted sizing** (target_dv=2.5%, vol_n=72) — smooths exposure
+  across vol regimes, +0.13 composite.
+
+**Ruled out:**
+- 24h time stop — kills winners that need >1d to revert.
+- ATR(14) stop k=3 — same problem; MR doesn't want a hard stop.
+- ADX < 25 entry filter — laggy on 1h; cuts trades, no quality lift.
+- RSI 20/80 entry — too rare (0 OOS trades in W2 on 1h BTC).
+- Funding filter ≤0.01%/8h — too tight, no PF improvement.
+- Universe → ETHUSDT only — W4 +4.04 but W3 −0.79, MaxDD 18%, fragile.
+- Universe → INJUSDT only — wildly volatile WF, MaxDD 26.8%.
+- `k_entry 2.5 → 2.75` — trade count fell below TIP penalty floor.
+
+**Open angles (worth re-trying with stronger discipline):**
+- Lower TF (5m / 1m) for microstructure scalps — costs become load-bearing
+  but reversion is faster; classical pairs-trading territory.
+- Cross-sectional pairs reversion (spread of two cointegrated symbols, not
+  price level) — true mean-reversion edge.
+- Liquidation reversion (5m bars with extreme range/ATR fade-entry).
+- Funding-aware asymmetric long/short bias (long when funding negative,
+  short when funding positive) — never tested cleanly.
+- Scaling out (partial exit at z=0.5, full exit at z=0.0).
+
+**Key lesson.** **The central cautionary tale of the project.** Composite
++1.28 with DSR 0.75 was statistical noise selection, not edge — exposed by:
+permutation p=1.0 (no chronological dependence), train/OOS sign inversion
+(0/4 windows agree on sign), and stitched equity −27.5%. **Bollinger-fade
+on 1h BTC at any parameter setting does not have a real edge** — the
+appearance of edge comes from WF calendar bias: OOS slices happen to land
+on consolidation pockets, train slices on trends. This finding directly
+motivated the dashboard's trust-verdict panel (commit 06ec490). Real MR
+edge in crypto likely lives at lower TFs or cross-sectional, not as
+single-symbol band-fade on hourly bars.
+
+---
+
 # Cross-cutting primitives (what worked across multiple strategies)
 
 These survived in 2+ strategies and are worth trying first on any new strategy:
@@ -435,6 +582,9 @@ These survived in 2+ strategies and are worth trying first on any new strategy:
 4. **Asymmetric long/short parameters** — `mom_tsmom` (asymmetric lookback), `trend_supertrend` (asymmetric multiplier). Crypto long-bias makes symmetric shorts structurally worse.
 5. **Continuous rebalance (hold=1) + vol-target per leg** — `mom_xsection`. Solves "strategy flat most of the time" problem while equalizing risk.
 6. **`lookback ≤ OOS_window / 2`** — hard rule. Longer lookbacks eat the OOS slice as warmup, inflating Sharpe on a small effective sample.
+7. **Symmetric shorts via `np.select` priority** — breakthrough in `donchian_breakout` iter 11 (long-only-to-symmetric pivot was +5 composite points). State machines with overlapping entry/exit conditions need explicit priority, not implicit ordering.
+8. **Vol-cap entry filter** (`atr/close > expanding-q90`) — `donchian_breakout` iter 17. Lookahead-safe filter that drops extreme-vol fakeout bars. Interior optimum exists (q=0.85 too tight, q=0.95 too loose).
+9. **Tight `k_exit` for MR** (`mean_revert`: 0.5 → 0.25). Don't exit MR positions on band-touch — wait for full revert. Single biggest composite mover in that strategy.
 
 # Cross-cutting anti-patterns (always burn)
 
@@ -448,6 +598,11 @@ These survived in 2+ strategies and are worth trying first on any new strategy:
 8. **Cherry-picking universe** to fix one window — `mom_tsmom` (top-3 majors, 8 trades), refuted multiple times.
 9. **Long lookback for short OOS slice** — `mom_xsection` lookback=180 ate first half of every OOS window as warmup, inflating Sharpe on small effective sample.
 10. **Iter-tuning until OOS looks good** — that IS using OOS as train. Watch DSR drift across iters as the canary.
+11. **Composite alone as a verdict** — `mean_revert` had composite +1.28 / DSR 0.75 (looks excellent) while permutation p=1.0, train-OOS sign-gap −2.92, and stitched 24mo equity −27.5%. Single-metric trust is structurally unsafe; always cross-check with permutation p, sign agreement, and stitched equity. This is what the dashboard's trust-verdict panel was built to surface.
+12. **Hurst R/S regime classifier on 4h BTC** — `donchian_breakout` batch 4. Hurst never registers <0.5 on 4h BTC over 2024-2025; the classical "trending vs mean-reverting" cut is structurally dead at this TF.
+13. **ADX as flat-regime gate on 4h** — `donchian_breakout` batch 4. ADX is anti-correlated with profitability on OOS (W2 winner has lower ADX than W3 loser). The gate would suppress winners.
+14. **Chandelier trailing stop on 1h crypto trend-followers** (`donchian_breakout` k=3 and k=5 both REVERT). Routine intra-trend ATR-scale pullbacks force tight-enough-to-catch-reversals stops to chop normal winners.
+15. **Hard MR stops** (`mean_revert` ATR k=3, 24h time stop) — both REVERT. The stop activates precisely on bars where the MR thesis is strongest.
 
 # Framework lessons for future research
 
@@ -457,13 +612,18 @@ These survived in 2+ strategies and are worth trying first on any new strategy:
 4. **`min_trades=50` per WF window is too coarse for regime-aware MR.** A strategy that correctly stays flat when cointegration / dispersion breaks should not be auto-penalized to -∞. (`pairs_trading`.)
 5. **`--lookback 60D` default + stacked positions = phantom train trades.** Pairs and any strategy with overlapping per-symbol exposure need `--lookback "0"` to avoid TRAIN-attributed long-running round-trips from the padding period.
 6. **Holdout is one shot.** `xs_momentum` is forever holdout-spent on its 2026 window. Plan the holdout decision carefully.
+7. **Trust-verdict panel** (dashboard commit 06ec490) is the headline, not composite. Four independent checks: permutation p-value, BHY-haircut Sharpe, train/OOS sign agreement, stitched 24mo P&L. Red = ≥2 failed; green = all known passed + ≥3 known. Built specifically because `mean_revert` composite +1.28 was structural noise.
+8. **Permutation p-value vs block p-value gap is diagnostic.** If block-bootstrap p ≪ permutation p, the strategy depends on chronology (good). If permutation p ≈ 1 while block p looks fine, the apparent edge is non-time-series — shuffling preserves it. `mean_revert` is the canonical example.
+9. **Inverse train-OOS Sharpe gap is more suspicious than classical overfit.** train >> OOS = strategy learned the past (understandable). train ≪ OOS in *every* WF window = the WF refit calendar is selecting regime-matching OOS slices, not edge. `mean_revert` mean gap −2.92 across 4 windows.
+10. **Diagnostic-first batches work.** Each iter-1 as no-edit diagnostic on prior best's trades parquet repeatedly produced the right next hypothesis (`donchian_breakout` batches 2 W3 forensics → ATR-stop, batch 3 W3/W4 entry-feature comparison → volume confirmation, batch 4 classifier separability → family closed).
 
 # Untried directions (parked, not refuted)
 
 - **Funding-rate-as-signal** across most strategies (filter, sizing, regime). Mentioned in `METHODS.md §2`. Tried only as a coarse sign-gate; not as a graded signal.
-- **HMM regime classification** (model-based, not threshold) — `keltner_regime_switch` negative result on ADX-tercile suggests trying a richer classifier.
-- **Hurst exponent regime classifier** (H > 0.5 = trending, H < 0.5 = MR).
-- **BBW (Bollinger band width) as regime signal.**
+- **HMM regime classification** (model-based, not threshold) — `keltner_regime_switch` negative result on ADX-tercile suggests trying a richer classifier. `donchian_breakout` batch 4 closed all single-classifier-quantile approaches at 4h BTC; HMM with multiple features may still work.
+- ~~Hurst exponent regime classifier~~ — **refuted at 4h BTC** (`donchian_breakout` batch 4: zero bars with H<0.5 over 2024-2025).
+- **BBW (Bollinger band width) as regime signal.** Partial test via BB-squeeze pre-breakout in `donchian_breakout` iter 34 — inverts regime selection (W3 +1.98 but breaks W1/W2/W4); mechanism plausible, needs different combination.
+- **Within-trade regime detection** for trend-followers — fast-MR exit on first counter-move once breakout fails to extend. The one structurally untested W3-targeting hypothesis from `donchian_breakout` batch 4.
 - **Pairs with FDR correction across candidate pairs** — `pairs` open item; the most important honest-research addition.
 - **Multi-strategy portfolio** — `xs_momentum` open item: combining market-neutral long-only with a directional strategy may compound to portfolio Sharpe > 2 via low correlation.
 - **Mid-cap universe extension (60-80 coins)** for XS strategies — `mom_xsection` parked open angle.

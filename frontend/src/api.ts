@@ -369,7 +369,7 @@ export const api = {
     ),
   iterate: (
     name: string,
-    body: { start: string; end: string; tf: string; walk: number; note: string }
+    body: { start: string; end: string; tf: string; walk: number; note: string; expanding_wf?: boolean }
   ) =>
     j<Job>(`/api/strategies/${name}/iterate`, {
       method: "POST",

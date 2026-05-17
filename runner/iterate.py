@@ -84,6 +84,15 @@ class IterationConfig:
     audit_mode: str = "once"
     audit_k: int = 12
     audit_sample_bars: int = 1500
+    # Walk-forward training-window mode:
+    #   False (default) = disjoint tiles, each window trained on its own
+    #     slice of length ``total / n_windows`` (legacy behaviour).
+    #   True            = expanding window, every window's train_start
+    #     is period_start so the training history grows monotonically.
+    #     Closer to the live operator's "use all history I have" stance,
+    #     better for slow-indicator strategies that need ≥1 year of bars
+    #     to warm up. OOS slicing and embargo are identical between modes.
+    walk_expanding: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -282,7 +291,8 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
                         embargo=cfg.embargo, costs=costs,
                         lookback=cfg.lookback,
                         return_curves=True,
-                        seed_hint=iter_id)
+                        seed_hint=iter_id,
+                        walk_expanding=cfg.walk_expanding)
     except Exception as e:
         error = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=3)}"
         result = {"main": {"train": {}, "oos": {}}}
@@ -782,6 +792,10 @@ def main() -> None:
     ap.add_argument("--dd-penalty", type=float, default=0.5)
     ap.add_argument("--min-trades", type=int, default=50)
     ap.add_argument("--epsilon", type=float, default=0.01)
+    ap.add_argument("--expanding-wf", action="store_true",
+                    help="Use expanding-window walk-forward (each window "
+                         "trains on all data from period_start through its "
+                         "cutoff). Default is disjoint-tile mode.")
     ap.add_argument("--note", default="")
     args = ap.parse_args()
 
@@ -798,6 +812,7 @@ def main() -> None:
         epsilon=args.epsilon,
         audit_mode=args.audit,
         audit_k=args.audit_k,
+        walk_expanding=args.expanding_wf,
     )
     # Force UTF-8 on stdout so the diagnostics flag glyphs (✓/⚠/✗/ℹ)
     # render readable instead of escaped \uXXXX. Windows cp1252 console

@@ -75,10 +75,28 @@ def train_oos(period_start: str, period_end: str, oos_fraction: float = 0.25,
 
 def walk_forward(period_start: str, period_end: str, n_windows: int = 4,
                  oos_fraction: float = 0.25,
-                 embargo: pd.Timedelta | str | None = None) -> list[Split]:
-    """Sliding windows that together tile [start, end). Each window has
-    its own train/OOS split, with the same embargo applied at each
-    window's cutoff."""
+                 embargo: pd.Timedelta | str | None = None,
+                 expanding: bool = False) -> list[Split]:
+    """Walk-forward windows over ``[period_start, period_end)``.
+
+    Two modes — both produce ``n_windows`` Splits whose OOS slices tile
+    the period; they differ in how train slices are sized:
+
+      ``expanding=False`` (default, legacy behaviour): each window is a
+        disjoint tile of length ``total / n_windows``. Window i's train
+        slice is roughly ``(1 - oos_fraction) × total / n_windows`` long.
+        Total period split into n equally-sized non-overlapping chunks.
+
+      ``expanding=True``: each window's ``train_start = period_start``
+        (no rolling-off), so train grows from window to window while
+        OOS continues to tile. Window 0 looks identical between modes;
+        window i in expanding mode has a train slice ~``(1 + i × (1 -
+        oos_fraction)) × total / n_windows`` long. This matches the
+        live operator workflow — when you ship, you have all of history,
+        not just the last ``total / n`` of it.
+
+    OOS slices and embargo behave identically in both modes.
+    """
     s = pd.Timestamp(period_start, tz="UTC")
     e = pd.Timestamp(period_end, tz="UTC")
     total = e - s
@@ -86,15 +104,15 @@ def walk_forward(period_start: str, period_end: str, n_windows: int = 4,
     emb = _as_timedelta(embargo)
     out = []
     for i in range(n_windows):
-        ws = s + win * i
         we = s + win * (i + 1)
-        cutoff = ws + (we - ws) * (1 - oos_fraction)
-        oos_start = cutoff + emb
+        cutoff_local = s + win * i + (we - (s + win * i)) * (1 - oos_fraction)
+        oos_start = cutoff_local + emb
         if oos_start >= we:
             raise ValueError(
                 f"embargo {emb} consumes the entire OOS slice of window {i+1}/"
-                f"{n_windows} (cutoff {cutoff} → {we}, window length {win}); "
+                f"{n_windows} (cutoff {cutoff_local} → {we}, window length {win}); "
                 f"reduce embargo, n_windows, or oos_fraction"
             )
-        out.append(Split(ws, cutoff, oos_start, we))
+        train_start = s if expanding else (s + win * i)
+        out.append(Split(train_start, cutoff_local, oos_start, we))
     return out

@@ -425,7 +425,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
         embargo: str | pd.Timedelta | None = None,
         costs=None,
         lookback: str | pd.Timedelta | None = None,
-        seed_hint: int | None = None) -> dict:
+        seed_hint: int | None = None,
+        walk_expanding: bool = False) -> dict:
     """Top-level: train/OOS split (and optionally walk-forward), return aggregated metrics.
 
     ``embargo`` injects a gap between train and OOS in every split (single
@@ -479,7 +480,7 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
         windows = []
         wf_curves: list[dict] = []
         wf_splits = walk_forward(period_start, period_end, n_windows=walk_windows,
-                                 embargo=embargo)
+                                 embargo=embargo, expanding=walk_expanding)
         for i, sp in enumerate(wf_splits):
             print(f"[wf] window {i+1}/{len(wf_splits)} "
                   f"({sp.train_start.date()} -> {sp.oos_end.date()}) running...",

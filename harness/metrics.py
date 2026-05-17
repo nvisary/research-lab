@@ -1,6 +1,8 @@
 """Performance metrics from a portfolio equity curve."""
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -55,6 +57,18 @@ def _resolve_periods_per_year(index: pd.DatetimeIndex, tf: str | None) -> float:
     dt_seconds = (index[-1] - index[0]).total_seconds() / max(len(index) - 1, 1)
     if dt_seconds <= 0:
         return 1.0
+    # Final fallback path: infer the canonical bar period from the
+    # index spacing. This is the SILENT-DEFLATION risk flagged in
+    # MATH_AUDIT.md H2 — when the index has gaps, dt_seconds is the
+    # *average* spacing and overstates the bar period, shrinking the
+    # annualisation factor and under-reporting Sharpe. Emit a
+    # RuntimeWarning so callers know they're on the gap-deflated path.
+    warnings.warn(
+        f"_resolve_periods_per_year falling back to index-inferred dt "
+        f"({dt_seconds:.0f}s); tf was {tf!r}. With gappy data this "
+        f"under-reports Sharpe. Pass a canonical tf in TF_PERIODS_PER_YEAR.",
+        RuntimeWarning, stacklevel=2,
+    )
     return (365.25 * 24 * 3600) / dt_seconds
 
 

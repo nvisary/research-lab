@@ -25,6 +25,7 @@ type IterForm = {
   end: string;
   tf: string;
   walk: number;
+  expanding_wf: boolean;
   note: string;
 };
 
@@ -35,6 +36,7 @@ const defaultForm: IterForm = {
   // override by typing a value here.
   tf: "",
   walk: 4,
+  expanding_wf: false,
   note: "",
 };
 
@@ -539,6 +541,17 @@ export function StrategyDetail() {
               onChange={(e) => setForm({ ...form, walk: parseInt(e.target.value || "0") })}
               className="input w-16"
             />
+          </Field>
+          <Field label="expanding">
+            <label className="flex items-center gap-1 mt-1 text-xs"
+                   title="Expanding-window WF: each window trains on all data from period_start through its cutoff (vs disjoint tiles).">
+              <input
+                type="checkbox"
+                checked={form.expanding_wf}
+                onChange={(e) => setForm({ ...form, expanding_wf: e.target.checked })}
+              />
+              wf
+            </label>
           </Field>
           <Field label="note" grow>
             <input

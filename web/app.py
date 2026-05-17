@@ -374,6 +374,7 @@ class IterateRequest(BaseModel):
     # the strategy's intended TF.
     tf: str | None = None
     walk: int = 4
+    expanding_wf: bool = False
     note: str = ""
 
 
@@ -392,6 +393,8 @@ def api_iterate(name: str, body: IterateRequest):
     # DEFAULT_TF from strategy.py.
     if body.tf:
         cmd.extend(["--tf", body.tf])
+    if body.expanding_wf:
+        cmd.append("--expanding-wf")
     job = _start_job(cmd)
     return job.to_json()
 

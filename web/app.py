@@ -163,6 +163,247 @@ def _load_best(strategy: str) -> dict | None:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def _stitched_total_return(strategy: str, iter_id: int) -> dict | None:
+    """Read the saved equity parquet for an iter and stitch per-window
+    returns into one continuous 24mo equity. Returns total compounded
+    return + per-year compounded return. Used by the trust-verdict
+    block — answers the "if you ran this strategy non-stop on the full
+    24mo, what's the equity at end?" question that composite hides.
+
+    Returns None if the equity parquet is missing or empty.
+    """
+    p = _strategy_dir(strategy) / "runs" / "equity" / f"iter_{iter_id:04d}.parquet"
+    if not p.exists():
+        return None
+    try:
+        df = pd.read_parquet(p)
+    except Exception:
+        return None
+    if df.empty:
+        return None
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.sort_values("timestamp")
+    if "window" in df.columns:
+        rets = []
+        for _, g in df.groupby("window"):
+            g = g.sort_values("timestamp")
+            r = g["equity"].pct_change().fillna(0.0)
+            rets.append(pd.Series(r.values, index=g["timestamp"]))
+        rets_concat = pd.concat(rets).sort_index()
+    else:
+        rets_concat = df.set_index("timestamp")["equity"].pct_change().fillna(0.0)
+    if rets_concat.empty:
+        return None
+    total = float((1.0 + rets_concat).prod() - 1.0)
+    # Per-year compounded.
+    by_year: dict[int, float] = {}
+    for y, grp in rets_concat.groupby(rets_concat.index.year):
+        by_year[int(y)] = float((1.0 + grp).prod() - 1.0)
+    monthly = ((1.0 + rets_concat).resample("MS").prod() - 1.0).dropna()
+    n_positive_months = int((monthly > 0).sum())
+    n_months = int(len(monthly))
+    return {
+        "total_return": total,
+        "year_returns": [{"year": y, "return": r} for y, r in sorted(by_year.items())],
+        "n_months": n_months,
+        "n_positive_months": n_positive_months,
+        "pct_positive_months": (n_positive_months / n_months) if n_months else None,
+    }
+
+
+def _compute_trust_verdict(strategy: str, best: dict | None,
+                           history: list[dict]) -> dict | None:
+    """Single honest verdict on whether `best` is likely real edge or
+    selection-bias artefact. Combines four independent checks:
+
+      1. Permutation p-value (from latest research_stats with permutation)
+         — does the strategy depend on bar chronology? p≈1 means shuffling
+         the timeline doesn't break it = no real time-series edge.
+      2. BHY-haircut Sharpe (Harvey-Liu-Zhu correction for N trials)
+         — raw Sharpe minus the selection-bias tax. < 0.5 means most of
+         the apparent edge is the "best of N" effect.
+      3. Train/OOS sign agreement across WF windows. Both negative is
+         honest (strategy bleeds in this regime, both slices agree).
+         Both positive is honest. Train negative + OOS positive in all
+         windows is the calendar-bias / selection-on-OOS signature.
+      4. Stitched 24mo total return. Composite is OOS-only (~25% of
+         period); stitched is the full account. Negative + composite
+         positive = OOS-only edge that vanishes on real money.
+
+    Returns None when best is missing. Otherwise:
+      {
+        level: "green" | "yellow" | "red",
+        label: ...,
+        checks: [{name, passed, value, threshold, note}],
+        headline_sharpe: {raw, bhy, haircut_pct},
+        sign_agreement: {agree, total, train_signs, oos_signs},
+        stitched: {total_return, year_returns, n_months, pct_positive_months},
+      }
+    """
+    if not best:
+        return None
+
+    # --- Check 3: train/OOS sign agreement across WF windows. ---
+    wf = best.get("walk_forward") or {}
+    windows = wf.get("windows") or []
+    train_signs: list[str] = []
+    oos_signs: list[str] = []
+    agree_count = 0
+    for w in windows:
+        ts = ((w.get("train") or {}).get("sharpe"))
+        os_ = ((w.get("oos") or {}).get("sharpe"))
+        if ts is None or os_ is None:
+            train_signs.append("?")
+            oos_signs.append("?")
+            continue
+        t_sign = "+" if ts > 0 else ("-" if ts < 0 else "0")
+        o_sign = "+" if os_ > 0 else ("-" if os_ < 0 else "0")
+        train_signs.append(t_sign)
+        oos_signs.append(o_sign)
+        if t_sign == o_sign and t_sign != "?":
+            agree_count += 1
+    sign_agreement = {
+        "agree": agree_count,
+        "total": len(windows),
+        "train_signs": train_signs,
+        "oos_signs": oos_signs,
+    }
+    # Pass: ≥ 3/4 (or ≥ 75% for other counts) — honest WF behaviour.
+    sign_passed: bool | None
+    if not windows:
+        sign_passed = None
+    else:
+        sign_passed = agree_count / len(windows) >= 0.75
+
+    # --- Checks 1 & 2: permutation p + BHY haircut Sharpe. ---
+    # Pull from history's latest research_stats block.
+    perm_p: float | None = None
+    raw_sharpe: float | None = None
+    bhy_sharpe: float | None = None
+    bhy_haircut_pct: float | None = None
+    for row in reversed(history):
+        rs = row.get("research_stats") or {}
+        if not rs:
+            continue
+        boot = rs.get("bootstrap") or {}
+        perm = boot.get("permutation") or {}
+        if perm and perm.get("p_values"):
+            perm_p = perm["p_values"].get("sharpe")
+        hc = (rs.get("haircut_sharpe") or {})
+        if hc:
+            raw_sharpe = (hc.get("raw") or {}).get("sharpe")
+            bhy = hc.get("bhy") or {}
+            bhy_sharpe = bhy.get("sharpe")
+            bhy_haircut_pct = bhy.get("haircut_pct")
+        if perm_p is not None or bhy_sharpe is not None:
+            break
+
+    perm_passed: bool | None
+    if perm_p is None:
+        perm_passed = None
+    else:
+        # Pass: p < 0.10 (block-bootstrap style, generous).
+        perm_passed = perm_p < 0.10
+
+    bhy_passed: bool | None
+    if bhy_sharpe is None:
+        bhy_passed = None
+    else:
+        bhy_passed = bhy_sharpe > 0.5
+
+    # --- Check 4: stitched 24mo total return. ---
+    stitched = _stitched_total_return(strategy, int(best.get("iter") or 0))
+    stitched_passed: bool | None
+    if stitched is None:
+        stitched_passed = None
+    else:
+        stitched_passed = stitched["total_return"] >= 0.0
+
+    checks = [
+        {
+            "name": "Permutation p-value",
+            "passed": perm_passed,
+            "value": perm_p,
+            "threshold": "< 0.10",
+            "note": (
+                "Strategy depends on real time-series structure"
+                if perm_passed is True else
+                "Shuffling bar order doesn't break the 'edge' — it's not chronological"
+                if perm_passed is False else
+                "Not yet computed (run iterate to populate permutation bootstrap)"
+            ),
+        },
+        {
+            "name": "BHY-haircut Sharpe",
+            "passed": bhy_passed,
+            "value": bhy_sharpe,
+            "threshold": "> 0.5",
+            "note": (
+                f"Raw {raw_sharpe:.2f} survives {(bhy_haircut_pct or 0) * 100:.0f}% selection-bias haircut"
+                if bhy_passed is True and raw_sharpe is not None else
+                f"Raw {raw_sharpe:.2f} → BHY {bhy_sharpe:.2f} after correcting for trials selection"
+                if bhy_sharpe is not None and raw_sharpe is not None else
+                "Not yet computed"
+            ),
+        },
+        {
+            "name": "Train↔OOS sign agreement",
+            "passed": sign_passed,
+            "value": (agree_count, len(windows)),
+            "threshold": "≥ 75% of windows",
+            "note": (
+                f"{agree_count}/{len(windows)} WF windows have matching train & OOS direction"
+                if sign_passed is not None else
+                "No walk-forward windows"
+            ),
+        },
+        {
+            "name": "Stitched 24mo total return",
+            "passed": stitched_passed,
+            "value": (stitched or {}).get("total_return"),
+            "threshold": "≥ 0",
+            "note": (
+                "Strategy made money over the full train+val period (not just OOS slices)"
+                if stitched_passed is True else
+                "Strategy LOST money over full period — composite captures only OOS slices"
+                if stitched_passed is False else
+                "Equity parquet missing"
+            ),
+        },
+    ]
+
+    n_passed = sum(1 for c in checks if c["passed"] is True)
+    n_failed = sum(1 for c in checks if c["passed"] is False)
+    n_known = n_passed + n_failed
+
+    # Verdict logic:
+    #   green:  ALL known checks passed AND ≥ 3 known checks (need evidence)
+    #   red:    ≥ 2 checks failed (independent failures)
+    #   yellow: otherwise — mixed signals, incomplete, or single failure
+    if n_failed >= 2:
+        level = "red"
+        label = "NOISE-FIT — do not trust composite"
+    elif n_failed == 0 and n_known >= 3:
+        level = "green"
+        label = "REAL EDGE SIGNAL — ready for holdout"
+    else:
+        level = "yellow"
+        label = "MIXED — investigate before holdout"
+
+    return {
+        "level": level,
+        "label": label,
+        "checks": checks,
+        "headline_sharpe": {
+            "raw": raw_sharpe,
+            "bhy": bhy_sharpe,
+            "haircut_pct": bhy_haircut_pct,
+        },
+        "sign_agreement": sign_agreement,
+        "stitched": stitched,
+    }
+
+
 def _sanitize(o: Any) -> Any:
     if isinstance(o, dict):
         return {k: _sanitize(v) for k, v in o.items()}
@@ -214,13 +455,17 @@ def api_strategy(name: str):
     d = _strategy_dir(name)
     program = (d / "program.md").read_text(encoding="utf-8") if (d / "program.md").exists() else ""
     code = (d / "strategy.py").read_text(encoding="utf-8")
+    best = _load_best(name)
+    history = _load_history(name)
+    trust = _compute_trust_verdict(name, best, history)
     return _sanitize({
         "name": name,
         "description": _extract_description(d / "strategy.py"),
-        "best": _load_best(name),
-        "history": _load_history(name),
+        "best": best,
+        "history": history,
         "program_md": program,
         "strategy_py": code,
+        "trust_verdict": trust,
     })
 
 

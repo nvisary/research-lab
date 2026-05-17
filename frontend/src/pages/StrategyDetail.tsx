@@ -18,6 +18,7 @@ import { QualityIndicators } from "../components/QualityIndicators";
 import { TradesCard } from "../components/TradesCard";
 import { Tooltip } from "../components/Tooltip";
 import { ResearchIntegrity } from "../components/ResearchIntegrity";
+import { TrustVerdictBanner } from "../components/TrustVerdictBanner";
 import { CpcvCard } from "../components/CpcvCard";
 import { MetaLabelerCard } from "../components/MetaLabelerCard";
 import { ForwardCard } from "../components/ForwardCard";
@@ -275,6 +276,8 @@ export function StrategyDetail() {
         </div>
       </div>
 
+      <TrustVerdictBanner verdict={detail.trust_verdict} />
+
       <Card title="Best">
         {!best ? (
           <em className="text-slate-500">no successful iterations yet</em>
@@ -297,13 +300,65 @@ export function StrategyDetail() {
                   </>
                 }
               />
-              <KV k="composite" v={<strong>{fmt(best.composite)}</strong>} />
+              <KV
+                k="composite"
+                v={
+                  <>
+                    <strong className={
+                      detail.trust_verdict?.level === "red" ? "text-rose-300"
+                        : detail.trust_verdict?.level === "yellow" ? "text-amber-300"
+                        : detail.trust_verdict?.level === "green" ? "text-emerald-300"
+                        : ""
+                    }>
+                      {fmt(best.composite)}
+                    </strong>
+                    {detail.trust_verdict?.headline_sharpe?.bhy !== null
+                      && detail.trust_verdict?.headline_sharpe?.bhy !== undefined && (
+                      <span className="text-xs text-slate-500 ml-3">
+                        honest Sharpe (BHY):{" "}
+                        <span className={
+                          detail.trust_verdict.headline_sharpe.bhy > 0.5
+                            ? "text-emerald-400 mono"
+                            : "text-rose-400 mono"
+                        }>
+                          {fmt(detail.trust_verdict.headline_sharpe.bhy, 2)}
+                        </span>
+                      </span>
+                    )}
+                    {detail.trust_verdict?.level && (
+                      <span className="text-xs text-slate-500 ml-3">
+                        trust:{" "}
+                        <span className={
+                          detail.trust_verdict.level === "green" ? "text-emerald-400"
+                            : detail.trust_verdict.level === "yellow" ? "text-amber-400"
+                            : "text-rose-400"
+                        }>
+                          {detail.trust_verdict.level.toUpperCase()}
+                        </span>
+                      </span>
+                    )}
+                  </>
+                }
+              />
               <KV
                 k="DSR"
                 v={
-                  <span className={probabilityClass(best.dsr)} title="Deflated Sharpe Ratio: probability of true edge given the number of trials.">
-                    {fmt(best.dsr, 3)}
-                  </span>
+                  (() => {
+                    const tv = detail.trust_verdict;
+                    const permFailed = tv?.checks?.find(c => c.name === "Permutation p-value")?.passed === false;
+                    // If DSR is high but permutation says noise — override to warn.
+                    const cls = permFailed ? "text-amber-400" : probabilityClass(best.dsr);
+                    return (
+                      <span className={cls} title="Deflated Sharpe Ratio: probability of true edge given the number of trials. Amber when permutation p says the apparent edge is chronology-independent (i.e. shuffle-robust).">
+                        {fmt(best.dsr, 3)}
+                        {permFailed && (
+                          <span className="ml-2 text-xs text-amber-300">
+                            ⚠ permutation p said noise — DSR misleading here
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })()
                 }
               />
               <KV k="params" v={<code className="text-slate-300">{JSON.stringify(best.params)}</code>} />

@@ -139,6 +139,38 @@ export type Best = {
   saved_at: string;
 } | null;
 
+export type TrustCheck = {
+  name: string;
+  passed: boolean | null;
+  value: number | [number, number] | null;
+  threshold: string;
+  note: string;
+};
+
+export type TrustVerdict = {
+  level: "green" | "yellow" | "red";
+  label: string;
+  checks: TrustCheck[];
+  headline_sharpe: {
+    raw: number | null;
+    bhy: number | null;
+    haircut_pct: number | null;
+  };
+  sign_agreement: {
+    agree: number;
+    total: number;
+    train_signs: string[];
+    oos_signs: string[];
+  };
+  stitched: {
+    total_return: number;
+    year_returns: { year: number; return: number }[];
+    n_months: number;
+    n_positive_months: number;
+    pct_positive_months: number | null;
+  } | null;
+} | null;
+
 export type StrategyDetail = {
   name: string;
   description: string | null;
@@ -146,6 +178,7 @@ export type StrategyDetail = {
   history: HistoryRow[];
   program_md: string;
   strategy_py: string;
+  trust_verdict: TrustVerdict;
 };
 
 export type EquityWindow = {

@@ -15,6 +15,15 @@ export function Layout() {
             <Link to="/portfolio" className="hover:text-slate-100">
               portfolio
             </Link>
+            <Link to="/multistrat" className="hover:text-slate-100">
+              multistrat
+            </Link>
+            <Link to="/features" className="hover:text-slate-100">
+              features
+            </Link>
+            <Link to="/forward" className="hover:text-slate-100">
+              forward
+            </Link>
           </nav>
         </div>
       </header>

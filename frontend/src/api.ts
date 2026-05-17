@@ -402,6 +402,282 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  multistratLatest: () => j<MultiStratPayload | null>("/api/multistrat"),
+  multistratList: () => j<MultiStratListEntry[]>("/api/multistrat/list"),
+  multistratCandidates: () =>
+    j<MultiStratCandidate[]>("/api/multistrat/candidates"),
+  multistratRun: (body: {
+    strategies?: string[] | null;
+    n_boot?: number;
+    block_size?: number | null;
+    seed?: number | null;
+    benchmark?: number;
+    join?: "inner" | "outer";
+  }) =>
+    j<Job>("/api/multistrat/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  featuresList: () => j<FeatureMeta[]>("/api/features"),
+  featurePreview: (name: string, symbol: string, start: string, end: string, tf: string) =>
+    j<FeaturePreview>(
+      `/api/features/${name}/preview?symbol=${encodeURIComponent(symbol)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&tf=${encodeURIComponent(tf)}`,
+    ),
+  featureCoverage: (name: string) =>
+    j<FeatureCoverageRow[]>(`/api/features/${name}/coverage`),
+  strategyMeta: (name: string) =>
+    j<StrategyMetaPayload | null>(`/api/strategies/${name}/meta`),
+  forwardLatest: (name: string) =>
+    j<ForwardPayload | null>(`/api/strategies/${name}/forward`),
+  forwardList: (name: string) =>
+    j<ForwardListEntry[]>(`/api/strategies/${name}/forward/list`),
+  forwardRun: (name: string, body: {
+    start?: string | null; end?: string | null;
+    tf?: string | null; lookback?: string | null;
+  }) =>
+    j<Job>(`/api/strategies/${name}/forward/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  forwardSummary: () => j<ForwardSummaryRow[]>("/api/forward/summary"),
+};
+
+// --------------------------------------------------------------------------- //
+// Forward-test (post-holdout drift detection)
+// --------------------------------------------------------------------------- //
+export type ForwardDrift = {
+  n_periods: number;
+  forward_sharpe: number;
+  forward_total_return: number;
+  forward_max_dd: number;
+  forward_volatility: number;
+  backtest_sharpe: number | null;
+  backtest_sharpe_ci_lo: number | null;
+  backtest_sharpe_ci_hi: number | null;
+  sharpe_z_vs_backtest: number | null;
+  in_ci: boolean | null;
+  consecutive_below_ci_days: number;
+  forward_psr: number | null;
+  flag: "ok" | "warn" | "alert" | "unknown";
+  flag_reason: string;
+};
+
+export type ForwardReport = {
+  iter: number;
+  ran_at: string;
+  period: [string, string];
+  tf: string;
+  symbols: string[];
+  code_source: string;
+  snapshot_used: boolean;
+  metrics: Record<string, any>;
+  drift: ForwardDrift;
+  backtest_oos_sharpe: number | null;
+  backtest_sharpe_ci_lo: number | null;
+  backtest_sharpe_ci_hi: number | null;
+};
+
+export type ForwardPayload = {
+  report: ForwardReport;
+  equity: {
+    timestamp: string[];
+    equity: number[];
+    benchmark: number[];
+    rolling_sharpe_30d?: (number | null)[];
+  } | null;
+  report_file: string;
+};
+
+export type ForwardListEntry = {
+  file: string;
+  ran_at: string;
+  period: [string, string];
+  iter: number;
+  snapshot_used: boolean;
+  forward_sharpe: number | null;
+  forward_max_dd: number | null;
+  forward_psr: number | null;
+  flag: string | null;
+};
+
+export type ForwardSummaryRow = {
+  name: string;
+  has_forward: boolean;
+  flag: "ok" | "warn" | "alert" | "unknown" | null;
+  ran_at: string | null;
+  forward_sharpe: number | null;
+  backtest_sharpe: number | null;
+  backtest_sharpe_ci_lo: number | null;
+  backtest_sharpe_ci_hi: number | null;
+  consecutive_below_ci_days?: number;
+  period?: [string, string];
+};
+
+// --------------------------------------------------------------------------- //
+// Features + meta-labeler
+// --------------------------------------------------------------------------- //
+export type FeatureMeta = {
+  name: string;
+  description: string;
+  deps: string[];
+  lookback: string;
+  source_file: string;
+  source_line: number | null;
+};
+
+export type FeaturePreview = {
+  name: string;
+  symbol: string;
+  tf: string;
+  start: string;
+  end: string;
+  timestamp: string[];
+  values: (number | null)[];
+  n_points: number;
+  quantiles_05_25_50_75_95: (number | null)[];
+};
+
+export type FeatureCoverageRow = {
+  symbol: string;
+  tf: string;
+  months: string[];
+  n_months: number;
+  first: string;
+  last: string;
+};
+
+export type MetaWindowReport = {
+  status: "ok" | "skipped" | "failed";
+  reason?: string;
+  error?: string;
+  classifier?: "logreg" | "gbm";
+  mode?: "scale" | "gate";
+  threshold?: number;
+  features?: string[];
+  n_train_events?: number;
+  n_train_positive?: number;
+  train_class_balance?: number;
+  train_accuracy?: number;
+  train_precision_at_thresh?: number;
+  train_recall_at_thresh?: number;
+  feature_importances?: Record<string, number>;
+};
+
+export type StrategyMetaPayload = {
+  iter: number;
+  meta:
+    | MetaWindowReport
+    | {
+        per_window: MetaWindowReport[];
+        n_windows: number;
+        all_ok: boolean;
+        mean_train_accuracy: number | null;
+        any_skipped: boolean;
+      };
+};
+
+// --------------------------------------------------------------------------- //
+// MultiStrat (Reality Check / SPA / Romano-Wolf)
+// --------------------------------------------------------------------------- //
+export type MultiStratCandidate = {
+  name: string;
+  has_best: boolean;
+  best_iter: number | null;
+  composite: number | null;
+  tf?: string;
+  equity_present: boolean;
+};
+
+export type MultiStratListEntry = {
+  file: string;
+  ran_at: string;
+  n_strategies_used: number;
+  n_days: number;
+  reality_check_p: number | null;
+  spa_p_consistent: number | null;
+  n_reject_at_05: number;
+};
+
+export type MultiStratPerStrategy = {
+  strategy: string;
+  n_periods: number;
+  mean: number;
+  std: number;
+  sharpe_per_period: number;
+  rw_p_adj: number;
+  rw_rank: number;
+};
+
+export type MultiStratRealityCheck = {
+  test_stat: number;
+  p_value: number;
+  null_quantiles_05_50_95: number[];
+  n_boot: number;
+};
+
+export type MultiStratSPA = {
+  test_stat_studentized: number;
+  p_value_lower: number;
+  p_value_consistent: number;
+  p_value_upper: number;
+  n_kept_consistent: number;
+  n_kept_upper: number;
+  threshold_consistent: number;
+  n_boot: number;
+};
+
+export type MultiStratRWRow = {
+  strategy: string;
+  obs_stat_sqrtT_mean: number;
+  rank: number;
+  p_adj: number;
+  reject_at_05: boolean;
+  reject_at_10: boolean;
+};
+
+export type MultiStratReport = {
+  ran_at: string;
+  n_strategies_input: number;
+  n_strategies_used: number;
+  n_days: number;
+  strategies_used: string[];
+  strategies_skipped: Array<{ strategy: string; reason?: string }>;
+  per_strategy_meta: Record<string, {
+    iter?: number;
+    n_days?: number;
+    composite?: number;
+    tf?: string;
+    oos_start?: string;
+    oos_end?: string;
+  }>;
+  join: string;
+  seed: number | null;
+  correlation_matrix: Record<string, Record<string, number | null>>;
+  tests: {
+    n_strategies: number;
+    n_periods: number;
+    block_size: number;
+    n_boot: number;
+    benchmark: number;
+    period_start: string;
+    period_end: string;
+    per_strategy: MultiStratPerStrategy[];
+    reality_check: MultiStratRealityCheck;
+    spa: MultiStratSPA;
+    romano_wolf: MultiStratRWRow[];
+  };
+};
+
+export type MultiStratPayload = {
+  report: MultiStratReport;
+  daily_returns: {
+    timestamp: string[];
+    returns: Record<string, number[]>;
+    equity_curves: Record<string, number[]>;
+  } | null;
+  report_file: string;
 };
 
 export type ResearchStatsPayload = {

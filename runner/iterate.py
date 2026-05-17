@@ -606,6 +606,19 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "dsr": dsr_value,
         "audit": audit_summary,
         "research_stats": research_stats,
+        # Meta-labeler report from harness.backtest (None when META_LABELER
+        # is not exported by the strategy). Prefer the per-window list when
+        # walk-forward ran, so the UI sees how the classifier behaved across
+        # folds; fall back to the single-window dict otherwise.
+        # NOTE: result["walk_forward"] is a DICT { "windows": [...], "curves": ...},
+        # not a plain list — that's the harness contract.
+        "meta_labeler": (
+            ([w.get("meta_labeler") for w
+              in ((result.get("walk_forward") or {}).get("windows") or [])
+              if isinstance(w, dict) and w.get("meta_labeler")] or None)
+            if (result.get("walk_forward") or {}).get("windows")
+            else (result.get("main", {}) or {}).get("meta_labeler")
+        ),
         "env": env_mod.capture(),
         "note": note,
         "error": error,

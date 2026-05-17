@@ -19,6 +19,8 @@ import { TradesCard } from "../components/TradesCard";
 import { Tooltip } from "../components/Tooltip";
 import { ResearchIntegrity } from "../components/ResearchIntegrity";
 import { CpcvCard } from "../components/CpcvCard";
+import { MetaLabelerCard } from "../components/MetaLabelerCard";
+import { ForwardCard } from "../components/ForwardCard";
 
 type IterForm = {
   start: string;
@@ -582,6 +584,12 @@ export function StrategyDetail() {
 
       <Card title="Combinatorial Purged CV">
         <CpcvCard name={name} />
+      </Card>
+
+      <MetaLabelerCard strategy={name} />
+
+      <Card title="Forward-test (post-holdout drift)">
+        <ForwardCard strategy={name} />
       </Card>
 
       <Card title="History">

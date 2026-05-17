@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -830,6 +831,405 @@ def api_cpcv_run(name: str, body: CpcvRequest):
     if body.tf:
         cmd.extend(["--tf", body.tf])
     return _start_job(cmd).to_json()
+
+
+# --------------------------------------------------------------------------- #
+# Forward-test endpoints — post-holdout / live-paper analogue + drift.
+# --------------------------------------------------------------------------- #
+class ForwardRequest(BaseModel):
+    start: str | None = None
+    end: str | None = None
+    tf: str | None = None
+    lookback: str | None = "60D"
+
+
+@app.post("/api/strategies/{name}/forward/run")
+def api_forward_run(name: str, body: ForwardRequest):
+    """Kick off runner.forward as a background job."""
+    _strategy_dir(name)
+    cmd = [
+        sys.executable, "-m", "runner.forward",
+        f"strategies/{name}",
+        "--lookback", body.lookback or "60D",
+    ]
+    if body.start:
+        cmd.extend(["--start", body.start])
+    if body.end:
+        cmd.extend(["--end", body.end])
+    if body.tf:
+        cmd.extend(["--tf", body.tf])
+    return _start_job(cmd).to_json()
+
+
+@app.get("/api/strategies/{name}/forward")
+def api_forward_latest(name: str):
+    """Return the latest forward-test report + equity curve for ``name``.
+
+    Source: ``runs/forward/latest.json`` points to the canonical report.
+    Falls back to the most-recent ``forward_*.json`` on disk.
+    """
+    d = _strategy_dir(name)
+    fwd_dir = d / "runs" / "forward"
+    if not fwd_dir.exists():
+        return None
+    latest_ptr = fwd_dir / "latest.json"
+    target: Path | None = None
+    if latest_ptr.exists():
+        try:
+            ptr = json.loads(latest_ptr.read_text(encoding="utf-8"))
+            candidate = fwd_dir / ptr.get("file", "")
+            if candidate.exists():
+                target = candidate
+        except Exception:
+            pass
+    if target is None:
+        reports = sorted(fwd_dir.glob("forward_*.json"))
+        if not reports:
+            return None
+        target = reports[-1]
+
+    rep = json.loads(target.read_text(encoding="utf-8"))
+    parquet = target.with_suffix(".parquet")
+    curve = None
+    if parquet.exists():
+        df = pd.read_parquet(parquet)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        curve = {
+            "timestamp": [t.isoformat() for t in df["timestamp"]],
+            "equity": df["equity"].astype(float).tolist(),
+            "benchmark": df["benchmark"].astype(float).tolist(),
+        }
+        if "rolling_sharpe_30d" in df.columns:
+            curve["rolling_sharpe_30d"] = [
+                None if pd.isna(v) else float(v)
+                for v in df["rolling_sharpe_30d"]
+            ]
+    return _sanitize({"report": rep, "equity": curve,
+                      "report_file": target.name})
+
+
+@app.get("/api/strategies/{name}/forward/list")
+def api_forward_list(name: str):
+    """All forward reports for the strategy (most-recent first), summary only."""
+    d = _strategy_dir(name)
+    fwd_dir = d / "runs" / "forward"
+    if not fwd_dir.exists():
+        return []
+    out = []
+    for p in sorted(fwd_dir.glob("forward_*.json"), reverse=True):
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+            drift = r.get("drift") or {}
+            out.append({
+                "file": p.name,
+                "ran_at": r.get("ran_at"),
+                "period": r.get("period"),
+                "iter": r.get("iter"),
+                "snapshot_used": r.get("snapshot_used"),
+                "forward_sharpe": drift.get("forward_sharpe"),
+                "forward_max_dd": drift.get("forward_max_dd"),
+                "forward_psr": drift.get("forward_psr"),
+                "flag": drift.get("flag"),
+            })
+        except Exception:
+            pass
+    return _sanitize(out)
+
+
+@app.get("/api/forward/summary")
+def api_forward_summary():
+    """Cross-strategy snapshot: each strategy's latest forward flag.
+    Suitable for a top-level "what's drifting" overview."""
+    if not STRATS.exists():
+        return []
+    out = []
+    for d in sorted(p for p in STRATS.iterdir() if p.is_dir()):
+        if d.name.startswith("_") or not (d / "strategy.py").exists():
+            continue
+        fwd_dir = d / "runs" / "forward"
+        meta: dict[str, Any] = {
+            "name": d.name, "has_forward": False, "flag": None,
+            "ran_at": None, "forward_sharpe": None,
+            "backtest_sharpe": None, "backtest_sharpe_ci_lo": None,
+            "backtest_sharpe_ci_hi": None,
+        }
+        if fwd_dir.exists():
+            reports = sorted(fwd_dir.glob("forward_*.json"), reverse=True)
+            if reports:
+                try:
+                    r = json.loads(reports[0].read_text(encoding="utf-8"))
+                    drift = r.get("drift") or {}
+                    meta.update({
+                        "has_forward": True,
+                        "flag": drift.get("flag"),
+                        "ran_at": r.get("ran_at"),
+                        "forward_sharpe": drift.get("forward_sharpe"),
+                        "backtest_sharpe": drift.get("backtest_sharpe"),
+                        "backtest_sharpe_ci_lo": drift.get("backtest_sharpe_ci_lo"),
+                        "backtest_sharpe_ci_hi": drift.get("backtest_sharpe_ci_hi"),
+                        "consecutive_below_ci_days": drift.get("consecutive_below_ci_days"),
+                        "period": r.get("period"),
+                    })
+                except Exception:
+                    pass
+        out.append(meta)
+    return _sanitize(out)
+
+
+# --------------------------------------------------------------------------- #
+# Feature store endpoints — list / metadata / preview / coverage.
+# --------------------------------------------------------------------------- #
+@app.get("/api/features")
+def api_features_list():
+    """All registered features with metadata."""
+    import features as _feat
+    out = []
+    for name in _feat.list_features():
+        try:
+            out.append(_feat.feature_meta(name))
+        except Exception:
+            pass
+    return _sanitize(out)
+
+
+@app.get("/api/features/{name}/coverage")
+def api_feature_coverage(name: str):
+    """What's already cached on disk for ``name`` — list of (symbol, tf, months)."""
+    import features as _feat
+    try:
+        return _sanitize(_feat.coverage_table(name))
+    except KeyError:
+        raise HTTPException(404, f"unknown feature: {name}")
+
+
+@app.get("/api/features/{name}/preview")
+def api_feature_preview(name: str, symbol: str = "BTCUSDT",
+                        start: str = "2025-01-01",
+                        end: str = "2025-04-01",
+                        tf: str = "1h"):
+    """Compute a feature over [start, end) and return a downsampled
+    series suitable for plotting. Cached if previously requested.
+    """
+    import features as _feat
+    try:
+        series = _feat.compute(name, symbol, start, end, tf=tf, use_cache=True)
+    except KeyError:
+        raise HTTPException(404, f"unknown feature: {name}")
+    except Exception as e:
+        raise HTTPException(500, f"compute failed: {type(e).__name__}: {e}")
+    if series.empty:
+        return _sanitize({
+            "name": name, "symbol": symbol, "tf": tf,
+            "start": start, "end": end,
+            "timestamp": [], "values": [], "n_points": 0,
+        })
+    # Hard-cap plotting points; downsample uniformly if too dense.
+    max_pts = 2000
+    n = len(series)
+    if n > max_pts:
+        step = (n // max_pts) + 1
+        series = series.iloc[::step]
+    quantiles = series.dropna().quantile([0.05, 0.25, 0.5, 0.75, 0.95]).tolist() \
+        if not series.dropna().empty else [None] * 5
+    return _sanitize({
+        "name": name, "symbol": symbol, "tf": tf,
+        "start": start, "end": end,
+        "timestamp": [t.isoformat() for t in series.index],
+        "values": [None if pd.isna(v) else float(v) for v in series.values],
+        "n_points": int(len(series)),
+        "quantiles_05_25_50_75_95": quantiles,
+    })
+
+
+# --------------------------------------------------------------------------- #
+# Meta-labeler endpoint — surfaces the per-iter classifier report from
+# history.jsonl. Returns None for strategies that don't export META_LABELER.
+# --------------------------------------------------------------------------- #
+@app.get("/api/strategies/{name}/meta")
+def api_strategy_meta(name: str):
+    """Latest meta-labeler report for the strategy's current best iter.
+
+    Returns:
+      - None if no META_LABELER is configured or no report yet.
+      - { "iter": N, "meta": [...] | {...} } where meta is either a
+        per-window list (walk-forward) or a single dict (single split).
+    """
+    d = _strategy_dir(name)
+    best = _load_best(name)
+    if not best:
+        return None
+    target_iter = best.get("iter")
+    # Walk back through history for the row matching iter; meta_labeler
+    # is stored on the row itself by runner.iterate.
+    history = _load_history(name)
+    row = None
+    for h in reversed(history):
+        if h.get("iter") == target_iter:
+            row = h
+            break
+    if row is None:
+        return None
+    meta = row.get("meta_labeler")
+    if meta is None:
+        return None
+    # Aggregate per-window list into a summary card for the UI.
+    if isinstance(meta, list):
+        windows = meta
+        agg = {
+            "per_window": meta,
+            "n_windows": len(meta),
+            "all_ok": all((w or {}).get("status") == "ok" for w in meta),
+            "mean_train_accuracy": (
+                float(np.mean([(w or {}).get("train_accuracy", 0.0)
+                               for w in meta if (w or {}).get("status") == "ok"]))
+                if any((w or {}).get("status") == "ok" for w in meta) else None
+            ),
+            "any_skipped": any((w or {}).get("status") == "skipped" for w in meta),
+        }
+        return _sanitize({"iter": target_iter, "meta": agg})
+    return _sanitize({"iter": target_iter, "meta": meta})
+
+
+# --------------------------------------------------------------------------- #
+# Multi-strategy hypothesis tests (Reality Check / SPA / Romano-Wolf).
+# Reports are repo-level (not under any single strategy) — they answer the
+# "is the BEST of N strategies significantly > 0?" question.
+# --------------------------------------------------------------------------- #
+MULTISTRAT_DIR = ROOT / "runs" / "_multistrat"
+
+
+def _list_multistrat_reports() -> list[Path]:
+    if not MULTISTRAT_DIR.exists():
+        return []
+    return sorted(MULTISTRAT_DIR.glob("multistrat_*.json"), reverse=True)
+
+
+@app.get("/api/multistrat")
+def api_multistrat_latest():
+    """Latest multi-strategy report. None if never run.
+
+    Returns the full report JSON plus an inlined per-strategy daily-returns
+    table (capped) so the UI can plot per-strategy equity / scatter without
+    a second fetch.
+    """
+    reports = _list_multistrat_reports()
+    if not reports:
+        return None
+    latest = reports[0]
+    rep = json.loads(latest.read_text(encoding="utf-8"))
+    parquet = latest.with_suffix(".parquet")
+    daily_returns = None
+    if parquet.exists():
+        df = pd.read_parquet(parquet)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        df = df.sort_values("timestamp")
+        # Build cumulative equity curves (1$ → ...) for plotting.
+        curves: dict[str, list] = {}
+        for col in df.columns:
+            if col == "timestamp":
+                continue
+            r = df[col].fillna(0.0)
+            curves[col] = (1.0 + r).cumprod().tolist()
+        daily_returns = {
+            "timestamp": [t.isoformat() for t in df["timestamp"]],
+            "returns": {c: df[c].tolist() for c in df.columns if c != "timestamp"},
+            "equity_curves": curves,
+        }
+    return _sanitize({
+        "report": rep,
+        "daily_returns": daily_returns,
+        "report_file": latest.name,
+    })
+
+
+@app.get("/api/multistrat/list")
+def api_multistrat_list():
+    """All multistrat reports (most-recent first), summary only."""
+    out = []
+    for p in _list_multistrat_reports():
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+            tests = r.get("tests") or {}
+            rc = tests.get("reality_check") or {}
+            spa_ = tests.get("spa") or {}
+            rw = tests.get("romano_wolf") or []
+            out.append({
+                "file": p.name,
+                "ran_at": r.get("ran_at"),
+                "n_strategies_used": r.get("n_strategies_used"),
+                "n_days": r.get("n_days"),
+                "reality_check_p": rc.get("p_value"),
+                "spa_p_consistent": spa_.get("p_value_consistent"),
+                "n_reject_at_05": sum(1 for x in rw if x.get("reject_at_05")),
+            })
+        except Exception:
+            pass
+    return _sanitize(out)
+
+
+class MultiStratRequest(BaseModel):
+    strategies: list[str] | None = None
+    n_boot: int = 1000
+    block_size: int | None = None
+    seed: int | None = None
+    benchmark: float = 0.0
+    join: str = "inner"
+
+
+@app.post("/api/multistrat/run")
+def api_multistrat_run(body: MultiStratRequest):
+    """Kick off a multi-strategy test as a background job. Poll /api/jobs/{id}
+    for completion, then GET /api/multistrat for the report.
+    """
+    cmd = [
+        sys.executable, "-m", "runner.multistrat",
+        "--n-boot", str(body.n_boot),
+        "--benchmark", str(body.benchmark),
+        "--join", body.join,
+    ]
+    if body.strategies:
+        cmd.extend(["--strategies", ",".join(body.strategies)])
+    if body.block_size is not None:
+        cmd.extend(["--block-size", str(body.block_size)])
+    if body.seed is not None:
+        cmd.extend(["--seed", str(body.seed)])
+    return _start_job(cmd).to_json()
+
+
+@app.get("/api/multistrat/candidates")
+def api_multistrat_candidates():
+    """Strategies eligible to be included in a multistrat run, with
+    quick metadata so the UI can show which have an OOS slice on disk.
+
+    Source of truth: each strategy's runs/best.json + the existence of
+    runs/equity/iter_<best>.parquet.
+    """
+    if not STRATS.exists():
+        return []
+    out = []
+    for d in sorted(p for p in STRATS.iterdir() if p.is_dir()):
+        if d.name.startswith("_") or not (d / "strategy.py").exists():
+            continue
+        best_path = d / "runs" / "best.json"
+        meta: dict[str, Any] = {
+            "name": d.name, "has_best": False,
+            "best_iter": None, "composite": None,
+            "equity_present": False,
+        }
+        if best_path.exists():
+            try:
+                b = json.loads(best_path.read_text(encoding="utf-8"))
+                meta["has_best"] = True
+                meta["best_iter"] = b.get("iter")
+                meta["composite"] = b.get("composite")
+                meta["tf"] = b.get("tf")
+                if b.get("iter") is not None:
+                    eq = d / "runs" / "equity" / f"iter_{int(b['iter']):04d}.parquet"
+                    meta["equity_present"] = eq.exists()
+            except Exception:
+                pass
+        out.append(meta)
+    return _sanitize(out)
 
 
 @app.get("/api/jobs")

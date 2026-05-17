@@ -160,6 +160,218 @@ def _augment_trades_with_capacity(trades: pd.DataFrame,
     return out
 
 
+def _apply_meta_labeler(meta_spec, signals: pd.DataFrame,
+                        data: dict[str, pd.DataFrame],
+                        prices: pd.DataFrame,
+                        split, tf: str) -> tuple[pd.DataFrame, dict]:
+    """Train a meta-labeler on the train slice and modulate signals.
+
+    Returns (modulated_signals_long_df, meta_report_dict).
+
+    Implementation outline:
+      1. For each symbol with a primary signal, load the declared
+         features over the full data range.
+      2. Build per-symbol triple-barrier events restricted to those
+         that resolve fully before ``split.train_end`` (lookahead-safe).
+      3. Concatenate events across symbols → single supervised set.
+      4. Fit one MetaLabeler on the pooled set.
+      5. Score every symbol's signals using its own features. Modulate
+         per spec.mode ("scale" or "gate").
+      6. Return modulated signals in the same long-format DataFrame
+         schema the strategy produced.
+
+    The whole pipeline degrades gracefully:
+      - Missing features in cache → recomputed on the fly via the
+        feature store's compute() (cached for next run).
+      - Too few training events → raise, caught by caller which leaves
+        the primary signal untouched.
+    """
+    from harness.meta import MetaLabeler, meta_modulate
+    from features import compute as feat_compute
+    import numpy as _np
+
+    s = signals.copy()
+    if s.empty:
+        return signals, {"status": "skipped", "reason": "no primary signals"}
+    s["timestamp"] = pd.to_datetime(s["timestamp"], utc=True)
+
+    feature_names = list(meta_spec.features)
+    if not feature_names:
+        return signals, {"status": "skipped", "reason": "no features declared"}
+
+    train_end = split.train_end
+    period_start = prices.index.min()
+    period_end = prices.index.max() + pd.Timedelta(days=1)
+
+    # Per-symbol features (computed once, cached on disk by features.compute).
+    per_sym_features: dict[str, pd.DataFrame] = {}
+    per_sym_vol: dict[str, pd.Series] = {}
+    for sym in data.keys():
+        cols = {}
+        for fname in feature_names:
+            try:
+                cols[fname] = feat_compute(
+                    fname, sym, period_start, period_end, tf=tf,
+                    use_cache=True,
+                )
+            except Exception as exc:
+                cols[fname] = pd.Series(dtype="float64")
+        feat_df = pd.concat(cols.values(), axis=1) if cols else pd.DataFrame()
+        if not feat_df.empty:
+            feat_df.columns = list(cols.keys())
+            feat_df = feat_df.reindex(data[sym].index, method="ffill")
+        per_sym_features[sym] = feat_df
+        # Volatility series — used to scale triple-barrier widths.
+        try:
+            v = feat_compute(meta_spec.vol_feature, sym, period_start, period_end,
+                             tf=tf, use_cache=True)
+            v = v.reindex(data[sym].index, method="ffill")
+        except Exception:
+            # Fallback: rolling std of close returns at 30 bars.
+            v = data[sym]["close"].pct_change().rolling(30, min_periods=30).std(ddof=1)
+        per_sym_vol[sym] = v
+
+    # Build pooled training set: one (features, label) pair per primary event
+    # whose triple-barrier resolves by train_end (lookahead-safe).
+    primary_long = s
+    train_X_rows = []
+    train_y = []
+    train_sides = []
+    for sym, sub in primary_long.groupby("symbol", observed=True):
+        if sym not in data:
+            continue
+        close = data[sym]["close"]
+        sig = pd.Series(sub["position"].values, index=sub["timestamp"])
+        sig = sig[~sig.index.duplicated(keep="last")].sort_index()
+        sig = sig.reindex(close.index).fillna(0.0)
+        # Restrict events to those that have a chance to fully resolve by train_end:
+        # event timestamps ≤ train_end - max_holding_bars * bar_dt.
+        if len(close.index) < 2:
+            continue
+        bar_dt = (close.index[1] - close.index[0])
+        max_event_ts = train_end - bar_dt * meta_spec.max_holding_bars
+        train_sig = sig.loc[(sig.index <= max_event_ts) & (sig != 0)]
+        if train_sig.empty:
+            continue
+        from harness.labels import meta_labels as _meta_labels
+        tb = _meta_labels(
+            primary_signal=train_sig, close=close.loc[close.index <= train_end],
+            vol=per_sym_vol[sym].loc[per_sym_vol[sym].index <= train_end],
+            pt_mult=meta_spec.pt_mult, sl_mult=meta_spec.sl_mult,
+            max_holding_bars=meta_spec.max_holding_bars,
+        )
+        if tb.empty:
+            continue
+        feats = per_sym_features.get(sym)
+        if feats is None or feats.empty:
+            continue
+        X = feats.reindex(tb.index)
+        keep = X.notna().any(axis=1)
+        X = X.loc[keep]
+        y = tb.loc[X.index, "y"].astype(int)
+        if X.empty:
+            continue
+        train_X_rows.append(X)
+        train_y.append(y)
+        train_sides.append(tb.loc[X.index, "side"])
+
+    if not train_X_rows:
+        return signals, {
+            "status": "skipped",
+            "reason": "no training events with resolved triple-barriers",
+        }
+
+    X_train = pd.concat(train_X_rows, axis=0)
+    y_train = pd.concat(train_y, axis=0).astype(int)
+    if len(y_train) < meta_spec.min_train_events:
+        return signals, {
+            "status": "skipped",
+            "reason": f"only {len(y_train)} training events "
+                      f"(need ≥{meta_spec.min_train_events})",
+        }
+    if y_train.sum() == 0 or y_train.sum() == len(y_train):
+        return signals, {
+            "status": "skipped",
+            "reason": f"degenerate class balance "
+                      f"({int(y_train.sum())}/{len(y_train)} positive)",
+        }
+
+    # Fit ONE classifier on the pooled set.
+    from harness.meta import _make_classifier as _mk
+    model = _mk(meta_spec)
+    model.fit(X_train.values, y_train.values)
+
+    # Diagnostics on the train fit.
+    proba_train = model.predict_proba(X_train.values)[:, 1]
+    pred_train = (proba_train >= meta_spec.threshold).astype(int)
+    tp = int(((pred_train == 1) & (y_train.values == 1)).sum())
+    fp = int(((pred_train == 1) & (y_train.values == 0)).sum())
+    fn = int(((pred_train == 0) & (y_train.values == 1)).sum())
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    accuracy = float((pred_train == y_train.values).mean())
+
+    # Feature importance (coef magnitude or builtin).
+    importances: dict[str, float] = {n: 0.0 for n in X_train.columns}
+    try:
+        est = model[-1]
+        if hasattr(est, "coef_"):
+            w = _np.abs(est.coef_[0])
+            tot = w.sum()
+            if tot > 0:
+                importances = {n: float(v / tot)
+                               for n, v in zip(X_train.columns, w)}
+        elif hasattr(est, "feature_importances_"):
+            w = _np.asarray(est.feature_importances_, dtype=float)
+            tot = w.sum()
+            if tot > 0:
+                importances = {n: float(v / tot)
+                               for n, v in zip(X_train.columns, w)}
+    except Exception:
+        pass
+
+    # Apply: for each symbol's signal, predict proba (using lagged
+    # features, mirroring how the primary signal is generated) and
+    # modulate.
+    modulated_rows = []
+    for sym, sub in primary_long.groupby("symbol", observed=True):
+        feats = per_sym_features.get(sym)
+        if feats is None or feats.empty:
+            modulated_rows.append(sub)
+            continue
+        sub_ts = pd.to_datetime(sub["timestamp"], utc=True)
+        primary = pd.Series(sub["position"].values, index=sub_ts).sort_index()
+        X_lag = feats[X_train.columns].shift(1).reindex(primary.index)
+        valid = X_lag.notna().any(axis=1)
+        proba = pd.Series(_np.nan, index=primary.index, name="meta_proba")
+        if valid.any():
+            proba.loc[valid] = model.predict_proba(X_lag.loc[valid].values)[:, 1]
+        final = meta_modulate(primary, proba, meta_spec)
+        modulated_rows.append(pd.DataFrame({
+            "timestamp": final.index,
+            "symbol": sym,
+            "position": final.values,
+        }))
+
+    out_signals = pd.concat(modulated_rows, ignore_index=True) \
+        if modulated_rows else signals
+    report = {
+        "status": "ok",
+        "classifier": meta_spec.classifier,
+        "mode": meta_spec.mode,
+        "threshold": float(meta_spec.threshold),
+        "features": list(X_train.columns),
+        "n_train_events": int(len(y_train)),
+        "n_train_positive": int(y_train.sum()),
+        "train_class_balance": float(y_train.mean()),
+        "train_accuracy": accuracy,
+        "train_precision_at_thresh": float(precision),
+        "train_recall_at_thresh": float(recall),
+        "feature_importances": importances,
+    }
+    return out_signals, report
+
+
 def _positions_to_wide(signals: pd.DataFrame, symbols: list[str],
                        index: pd.DatetimeIndex,
                        max_position: float = 1.0) -> pd.DataFrame:
@@ -289,6 +501,34 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     n_stale = int(stale_mask.sum().sum())
 
     signals = strategy_mod.generate_signals(data, params)
+
+    # ---- Optional meta-labeling pass ----
+    # If the strategy exports META_LABELER, train a secondary classifier
+    # on triple-barrier outcomes of its OWN signals over the train slice,
+    # then modulate OOS signals by P(trade pays off | features).
+    # Lookahead-safe: training events are filtered to those that fully
+    # resolve before split.train_end. See harness/meta.py for details.
+    # If META_LABELER is absent, ``signals`` passes through unchanged.
+    meta_report: dict | None = None
+    try:
+        meta_spec = getattr(strategy_mod, "META_LABELER", None)
+    except Exception:
+        meta_spec = None
+    if meta_spec is not None:
+        try:
+            signals, meta_report = _apply_meta_labeler(
+                meta_spec, signals, data, prices, split, tf,
+            )
+        except Exception as exc:
+            # Meta-labeling failures must NEVER kill the backtest — the
+            # primary signal is the source of truth. Record the error
+            # in the report so the UI can surface it, and proceed
+            # with the unmodified signal.
+            meta_report = {
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
     target = _positions_to_wide(signals, symbols_present, prices.index,
                                   max_position=max_position)
     # Force flat on stale bars: closes any open position at the last known
@@ -375,6 +615,10 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         out["oos"]["sharpe_gap"] = sg
     except Exception:
         out["oos"]["sharpe_gap"] = None
+
+    # Attach meta-labeler report (if any) — small dict, fine in every payload.
+    if meta_report is not None:
+        out["meta_labeler"] = meta_report
 
     if return_curves:
         # Trim curves to the evaluation window [train_start, oos_end).

@@ -1,5 +1,6 @@
 data/bybit/
 data/meta/
+data/features/
 __pycache__/
 *.pyc
 .venv/
@@ -11,3 +12,5 @@ frontend/dist/
 .claude/worktrees/
 strategies/**/runs/**
 !strategies/**/runs/.gitkeep
+# Top-level cross-strategy artefacts (multistrat reports etc.)
+/runs/

@@ -179,10 +179,12 @@ def _sharpe_on_concat(returns: pd.Series, tf: str | None) -> float:
     each bar represents the same timespan regardless of gaps).
     """
     r = returns.dropna()
-    if len(r) < 2 or r.std(ddof=0) == 0:
+    if len(r) < 2:
         return 0.0
-    return float(r.mean() / r.std(ddof=0)
-                 * math.sqrt(_resolve_periods_per_year(r.index, tf)))
+    sd = r.std(ddof=1)
+    if sd == 0:
+        return 0.0
+    return float(r.mean() / sd * math.sqrt(_resolve_periods_per_year(r.index, tf)))
 
 
 def evaluate_path(returns: pd.Series, equity: pd.Series,
@@ -256,7 +258,7 @@ def summarize_paths(path_results: list[dict]) -> dict:
         "n_paths": n_paths,
         "median_sharpe": float(np.median(sharpes)),
         "mean_sharpe": float(np.mean(sharpes)),
-        "std_sharpe": float(np.std(sharpes, ddof=0)),
+        "std_sharpe": float(np.std(sharpes, ddof=1)) if len(sharpes) >= 2 else 0.0,
         "iqr_sharpe": [float(np.quantile(sharpes, 0.25)),
                        float(np.quantile(sharpes, 0.75))],
         "p05_sharpe": float(np.quantile(sharpes, 0.05)),

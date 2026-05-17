@@ -107,7 +107,7 @@ def compute_regime(equity_df: pd.DataFrame, tf: str | None = None) -> dict:
                              "hit_rate_pct": None})
             else:
                 r_in = sret[mask]
-                sd = float(r_in.std(ddof=0))
+                sd = float(r_in.std(ddof=1)) if len(r_in) >= 2 else 0.0
                 sh = float(r_in.mean() / sd * ann) if sd > 0 else 0.0
                 cell.update({
                     "sharpe": round(sh, 2),

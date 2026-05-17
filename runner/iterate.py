@@ -281,7 +281,8 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
                         tf=cfg.tf, walk_windows=cfg.walk_windows,
                         embargo=cfg.embargo, costs=costs,
                         lookback=cfg.lookback,
-                        return_curves=True)
+                        return_curves=True,
+                        seed_hint=iter_id)
     except Exception as e:
         error = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=3)}"
         result = {"main": {"train": {}, "oos": {}}}

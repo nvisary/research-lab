@@ -64,11 +64,20 @@ def _annualization_factor(index: pd.DatetimeIndex, tf: str | None = None) -> flo
 
 
 def sharpe(returns: pd.Series, tf: str | None = None) -> float:
+    """Annualized Sharpe ratio with Bessel-corrected (ddof=1) std.
+
+    Convention: ``ddof=1`` is used here AND in every other estimator in
+    `harness/` so the values are comparable. Effect vs the biased MLE
+    ddof=0 is a factor √(n/(n-1)) ≈ 0.5–1% at n in [100, 300] — Sharpe
+    is shrunk slightly relative to the legacy MLE form.
+    """
     r = returns.dropna()
-    if len(r) < 2 or r.std(ddof=0) == 0:
+    if len(r) < 2:
         return 0.0
-    return float(r.mean() / r.std(ddof=0)
-                 * np.sqrt(_resolve_periods_per_year(r.index, tf)))
+    sd = r.std(ddof=1)
+    if sd == 0:
+        return 0.0
+    return float(r.mean() / sd * np.sqrt(_resolve_periods_per_year(r.index, tf)))
 
 
 def sortino(returns: pd.Series, tf: str | None = None) -> float:
@@ -84,10 +93,14 @@ def sortino(returns: pd.Series, tf: str | None = None) -> float:
     downside = r[r < 0]
     if len(downside) == 0:
         return float("inf") if r.mean() > 0 else 0.0
-    if downside.std(ddof=0) == 0:
+    # ddof=1 requires len(downside) >= 2; with one loss the unbiased
+    # variance is undefined and we treat it the same as zero downside.
+    if len(downside) < 2:
+        return float("inf") if r.mean() > 0 else 0.0
+    sd = downside.std(ddof=1)
+    if sd == 0:
         return 0.0
-    return float(r.mean() / downside.std(ddof=0)
-                 * np.sqrt(_resolve_periods_per_year(r.index, tf)))
+    return float(r.mean() / sd * np.sqrt(_resolve_periods_per_year(r.index, tf)))
 
 
 def max_drawdown(equity: pd.Series) -> float:
@@ -193,26 +206,47 @@ def var_cvar(returns: pd.Series, levels: tuple[float, ...] = (0.95, 0.99),
              tf: str | None = None) -> dict:
     """Value-at-Risk and Conditional VaR (Expected Shortfall) at given levels.
 
-    Both expressed as positive fractions on **daily** returns: a VaR_95
-    of 0.04 means "5% of days lost more than 4%". When ``tf`` indicates
-    sub-daily bars, the bar-level returns are compounded to daily before
-    the percentile is taken — keeps the unit comparable across TFs and
-    matches how VaR is conventionally reported.
+    Both expressed as positive fractions.
 
-    Returns a dict like ``{"var_95": ..., "cvar_95": ..., "var_99":
-    ..., "cvar_99": ...}``. Values are ``None`` when the sample is too
-    small (<20 daily obs) to make the tail estimate meaningful.
+    Resolution policy (matters for inter-strategy comparability):
+      * When ``tf`` indicates >= 2 bars/day, bar-level returns are
+        compounded to daily before the percentile is taken — output
+        keys are ``var_95`` / ``cvar_95`` / ``var_99`` / ``cvar_99``,
+        all in the conventional daily unit.
+      * When ``tf`` indicates < ~1.5 bars/day (daily and longer cadences
+        like 1d / 1w / 1M), no resample is possible without inventing
+        data. Output keys are ``var_per_bar_95`` / ``cvar_per_bar_95``
+        / ``var_per_bar_99`` / ``cvar_per_bar_99`` to flag that these
+        are per-bar tail estimates, NOT daily. Mixing them with
+        sub-daily strategies' ``var_95`` would compare a weekly tail
+        against a daily tail.
+      * When ``tf`` is None or unrecognised, falls back to the legacy
+        daily-named keys with no resample (existing behaviour, lossy
+        on coarse data — emit a docstring warning rather than break
+        callers that read ``var_95`` directly).
+
+    Values are ``None`` when the sample is too small (<20 obs after
+    any resampling) to make the tail estimate meaningful.
     """
+    daily_keyed = True
+    if tf and tf in TF_PERIODS_PER_YEAR:
+        bars_per_day = TF_PERIODS_PER_YEAR[tf] / 365.25
+        # Anything coarser than ~1.5 bars/day cannot be reasonably
+        # compounded to daily (would yield <1 daily obs per period).
+        daily_keyed = bars_per_day >= 1.0
+
+    def _key(pct: int, name: str) -> str:
+        # name is "var" or "cvar"
+        return f"{name}_{pct}" if daily_keyed else f"{name}_per_bar_{pct}"
+
     out: dict[str, float | None] = {}
     for lev in levels:
         pct = int(round(lev * 100))
-        out[f"var_{pct}"] = None
-        out[f"cvar_{pct}"] = None
+        out[_key(pct, "var")] = None
+        out[_key(pct, "cvar")] = None
     r = pd.Series(returns).dropna()
     if r.empty:
         return out
-    # Resample to daily when bar-level. The conventional unit for VaR
-    # is daily, and percentiles on 1m bars are not interpretable.
     if tf and tf in TF_PERIODS_PER_YEAR:
         bars_per_day = TF_PERIODS_PER_YEAR[tf] / 365.25
         if bars_per_day > 1.5:
@@ -226,8 +260,8 @@ def var_cvar(returns: pd.Series, levels: tuple[float, ...] = (0.95, 0.99),
         var = -thresh  # positive number
         tail = r[r <= thresh]
         cvar = float(-tail.mean()) if not tail.empty else var
-        out[f"var_{pct}"] = float(var)
-        out[f"cvar_{pct}"] = float(cvar)
+        out[_key(pct, "var")] = float(var)
+        out[_key(pct, "cvar")] = float(cvar)
     return out
 
 
@@ -250,7 +284,7 @@ def information_ratio(returns: pd.Series, bench_returns: pd.Series,
     if len(aligned) < 30:
         return 0.0
     excess = aligned.iloc[:, 0] - aligned.iloc[:, 1]
-    sd = float(excess.std(ddof=0))
+    sd = float(excess.std(ddof=1))
     if sd == 0:
         return 0.0
     return float(excess.mean() / sd
@@ -479,14 +513,35 @@ def capacity_metrics(trades_in_slice: pd.DataFrame,
 def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
             n_trades: int, tf: str | None = None,
             benchmark: pd.Series | None = None,
-            trades_in_slice: pd.DataFrame | None = None) -> dict:
+            trades_in_slice: pd.DataFrame | None = None,
+            seed_hint: int | None = None) -> dict:
+    """Per-window/per-iter metrics summary.
+
+    ``seed_hint`` is forwarded to ``bootstrap_sharpe_ci`` so the CI is
+    reproducible for a given (iter, window) but varies across iters —
+    callers (e.g. runner.iterate) pass an iter-derived hash so the
+    history-table CI column shows the natural draw-to-draw drift instead
+    of the same number repeated forever. ``None`` keeps the legacy
+    fixed-seed behaviour for ad-hoc callers.
+    """
     # PSR is computed inline; DSR (which needs n_trials) is added by the caller.
     from harness.stats import psr as _psr, bootstrap_sharpe_ci as _ci
     sh = sharpe(returns, tf=tf)
     psr_value = _psr(returns, tf=tf) if len(returns.dropna()) >= 30 else 0.0
+    # Derive a per-call seed from seed_hint when provided. Hashing with
+    # n_boot keeps it distinct if n_boot is ever sweeped per call.
+    if seed_hint is not None:
+        ci_seed = int(hash((int(seed_hint), 400)) & 0xFFFFFFFF)
+    else:
+        ci_seed = None  # bootstrap_sharpe_ci default (seed=42) applies
     try:
-        ci_lo, ci_hi = (_ci(returns, n_boot=400, tf=tf)
-                        if len(returns.dropna()) >= 100 else (sh, sh))
+        if len(returns.dropna()) >= 100:
+            ci_kwargs = {"n_boot": 400, "tf": tf}
+            if ci_seed is not None:
+                ci_kwargs["seed"] = ci_seed
+            ci_lo, ci_hi = _ci(returns, **ci_kwargs)
+        else:
+            ci_lo, ci_hi = sh, sh
     except Exception:
         ci_lo, ci_hi = sh, sh
     bench_sh: float | None = None
@@ -583,7 +638,9 @@ def aggregate_wf_composite(window_metrics: list[dict],
         }
 
     mean_c = float(np.mean(composites))
-    std_c = float(np.std(composites, ddof=0))
+    # ddof=1 is undefined for n=1 (NaN); fall back to 0 stability term
+    # for the degenerate single-window case so score == mean_c.
+    std_c = float(np.std(composites, ddof=1)) if len(composites) >= 2 else 0.0
     score = mean_c - stability_penalty * std_c
 
     sharpes = [m.get("sharpe", 0.0) for m in window_metrics]
@@ -646,7 +703,7 @@ def aggregate_wf_composite(window_metrics: list[dict],
     alphas_clean = [a for a in alphas if a is not None]
     return score, {
         "mean_sharpe": float(np.mean(sharpes)),
-        "std_sharpe": float(np.std(sharpes, ddof=0)),
+        "std_sharpe": float(np.std(sharpes, ddof=1)) if len(sharpes) >= 2 else 0.0,
         "median_sharpe": float(np.median(sharpes)),
         "mean_max_dd": float(np.mean(dds)),
         "worst_max_dd": float(np.max(dds)),

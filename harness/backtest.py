@@ -233,7 +233,8 @@ def _run_vectorbt(prices: pd.DataFrame, target_pos: pd.DataFrame,
 # --------------------------------------------------------------------------- #
 def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
               tf: str = "1h", costs=DEFAULT_COSTS, return_curves: bool = False,
-              lookback: str | pd.Timedelta | None = None) -> dict:
+              lookback: str | pd.Timedelta | None = None,
+              seed_hint: int | None = None) -> dict:
     """Backtest a single train/OOS split. Returns {'train': metrics, 'oos': metrics, ...}.
 
     If `return_curves=True`, also returns 'equity' and 'benchmark' Series spanning
@@ -362,7 +363,8 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
             slice_trades = trades_all_df
         out[label] = M.summary(equity, rets, positions, n_trades=n_trades, tf=tf,
                                 benchmark=bench[mask],
-                                trades_in_slice=slice_trades)
+                                trades_in_slice=slice_trades,
+                                seed_hint=seed_hint)
 
     # Derived: train→OOS Sharpe gap. Overfitting indicator: > 1.0 is
     # a strong signal that the strategy fit the training period rather
@@ -422,7 +424,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
         return_curves: bool = False,
         embargo: str | pd.Timedelta | None = None,
         costs=None,
-        lookback: str | pd.Timedelta | None = None) -> dict:
+        lookback: str | pd.Timedelta | None = None,
+        seed_hint: int | None = None) -> dict:
     """Top-level: train/OOS split (and optionally walk-forward), return aggregated metrics.
 
     ``embargo`` injects a gap between train and OOS in every split (single
@@ -441,8 +444,14 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
         costs = DEFAULT_COSTS
 
     main_split = train_oos(period_start, period_end, embargo=embargo)
+    # Hash the seed_hint with window index (-1 for the single-split main)
+    # so each WF window — and the main split — get distinct deterministic
+    # bootstrap draws while remaining reproducible per (iter, window).
+    main_seed = (int(hash((int(seed_hint), -1)) & 0xFFFFFFFF)
+                 if seed_hint is not None else None)
     main = run_split(mod, p, symbols, main_split, tf=tf, costs=costs,
-                     return_curves=return_curves, lookback=lookback)
+                     return_curves=return_curves, lookback=lookback,
+                     seed_hint=main_seed)
 
     curves = None
     if return_curves and "equity" in main:
@@ -475,8 +484,11 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
             print(f"[wf] window {i+1}/{len(wf_splits)} "
                   f"({sp.train_start.date()} -> {sp.oos_end.date()}) running...",
                   flush=True)
+            win_seed = (int(hash((int(seed_hint), i)) & 0xFFFFFFFF)
+                        if seed_hint is not None else None)
             w = run_split(mod, p, symbols, sp, tf=tf, costs=costs,
-                          return_curves=return_curves, lookback=lookback)
+                          return_curves=return_curves, lookback=lookback,
+                          seed_hint=win_seed)
             oos_sh = (w.get("oos") or {}).get("sharpe", 0.0)
             print(f"[wf] window {i+1}/{len(wf_splits)} done -- OOS Sharpe {oos_sh:+.3f}",
                   flush=True)

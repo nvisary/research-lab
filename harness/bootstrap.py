@@ -146,9 +146,11 @@ def _equity_max_dd_magnitude(returns: np.ndarray) -> float:
 
 
 def _sharpe_ann(returns: np.ndarray, ann_factor: float) -> float:
+    # ddof=1 (Bessel-corrected sample std) — consistent with the rest
+    # of the harness. See harness/metrics.py:sharpe docstring.
     if len(returns) < 2:
         return 0.0
-    sd = returns.std(ddof=0)
+    sd = returns.std(ddof=1)
     if sd <= 0:
         return 0.0
     return float(returns.mean() / sd * ann_factor)
@@ -158,9 +160,12 @@ def _sortino_ann(returns: np.ndarray, ann_factor: float) -> float:
     if len(returns) < 2:
         return 0.0
     downside = returns[returns < 0]
-    if len(downside) == 0 or downside.std(ddof=0) <= 0:
+    if len(downside) < 2:
         return 0.0
-    return float(returns.mean() / downside.std(ddof=0) * ann_factor)
+    sd = downside.std(ddof=1)
+    if sd <= 0:
+        return 0.0
+    return float(returns.mean() / sd * ann_factor)
 
 
 # --------------------------------------------------------------------------- #
@@ -238,7 +243,7 @@ def block_bootstrap_pvalues(returns: pd.Series,
         p_total_return=p_tr,
         p_max_dd=p_dd,
         null_sharpe_mean=float(null_sh.mean()),
-        null_sharpe_std=float(null_sh.std(ddof=0)),
+        null_sharpe_std=float(null_sh.std(ddof=1)) if len(null_sh) >= 2 else 0.0,
         null_sharpe_quantiles=null_sh_q,
         null_dd_mean=float(null_dd.mean()),
         null_dd_quantiles=null_dd_q,
@@ -314,7 +319,7 @@ def permutation_pvalues(returns: pd.Series,
         p_total_return=p_tr,
         p_max_dd=p_dd,
         null_sharpe_mean=float(null_sh.mean()),
-        null_sharpe_std=float(null_sh.std(ddof=0)),
+        null_sharpe_std=float(null_sh.std(ddof=1)) if len(null_sh) >= 2 else 0.0,
         null_sharpe_quantiles=null_sh_q,
         null_dd_mean=float(null_dd.mean()),
         null_dd_quantiles=null_dd_q,

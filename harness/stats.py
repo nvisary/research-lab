@@ -25,11 +25,18 @@ from harness.metrics import _resolve_periods_per_year
 
 
 def _per_period_sharpe(returns: pd.Series, tf: str | None) -> tuple[float, float, int]:
-    """Return (per-period Sharpe, annualization sqrt-factor, n)."""
+    """Return (per-period Sharpe, annualization sqrt-factor, n).
+
+    Uses ``ddof=1`` for std (Bessel-corrected sample) consistent with the
+    rest of the harness — see harness/metrics.py:sharpe docstring.
+    """
     r = returns.dropna()
-    if len(r) < 3 or r.std(ddof=0) == 0:
+    if len(r) < 3:
         return 0.0, 1.0, len(r)
-    sr_pp = float(r.mean() / r.std(ddof=0))
+    sd = r.std(ddof=1)
+    if sd == 0:
+        return 0.0, 1.0, len(r)
+    sr_pp = float(r.mean() / sd)
     ann = math.sqrt(_resolve_periods_per_year(r.index, tf))
     return sr_pp, ann, len(r)
 
@@ -103,6 +110,15 @@ def bootstrap_sharpe_ci(returns: pd.Series, n_boot: int = 1000,
 
     Block size defaults to floor(n^(1/3)). With ~5000 hourly returns that's ~17
     bars — sensible for capturing local autocorrelation in 1h crypto data.
+
+    Seed policy: ``seed=42`` is the default so standalone callers get a
+    reproducible CI from the same returns. Iter-loop callers (``runner.iterate``
+    → ``harness.backtest`` → ``harness.metrics.summary``) thread an
+    iter-derived ``seed_hint`` into ``summary``, which converts it to a
+    distinct ``seed`` per (iter, window) — that surfaces natural CI drift
+    across iters in the history table while keeping each row reproducible.
+    Passing ``seed=None`` here would yield a non-reproducible CI, which
+    we deliberately avoid.
     """
     r = returns.dropna().values
     n = len(r)
@@ -124,7 +140,9 @@ def bootstrap_sharpe_ci(returns: pd.Series, n_boot: int = 1000,
             for j in range(length):
                 sample[pos + j] = r[(start + j) % n]
             pos += length
-        std = sample.std(ddof=0)
+        # ddof=1 inside the bootstrap loop too — keeps every per-sample
+        # Sharpe on the same Bessel-corrected scale as the point estimate.
+        std = sample.std(ddof=1) if len(sample) >= 2 else 0.0
         out[i] = (sample.mean() / std * ann) if std > 0 else 0.0
 
     lo = float(np.quantile(out, (1 - confidence) / 2))

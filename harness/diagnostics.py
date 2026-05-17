@@ -221,6 +221,24 @@ def build_diagnostics(iter_id: int, runs_dir: Path, summary: dict,
         except Exception:
             pass
 
+    # --- WF trade-overlap diagnostic ---
+    # Disjoint walk-forward windows tile [s, e); a strategy's run within
+    # window i+1 starts from (its) train_start, which in disjoint mode
+    # equals window_i.oos_end. If the strategy holds a position across
+    # that boundary, vbt closes it at window_i.oos_end and may re-open
+    # an identical-time, identical-symbol trade in window_{i+1}'s train
+    # — same (entry_time, symbol, entry_price) tuple appears in both
+    # windows' ledgers, and the stitched equity in the dashboard
+    # double-counts the P&L on those bars. We just count and flag;
+    # the fix (deduplicate or scope each window to its OOS slice) is
+    # a separate decision the operator should make explicitly.
+    if tr_path.exists():
+        try:
+            tr_df = pd.read_parquet(tr_path)
+            out["wf_overlap"] = _wf_trade_overlap(tr_df)
+        except Exception:
+            pass
+
     # --- Regime decomposition (vol × trend buckets) ---
     if eq_path.exists():
         try:
@@ -374,9 +392,61 @@ def _trade_shape(tr_df: pd.DataFrame) -> dict:
     return out
 
 
+def _wf_trade_overlap(tr_df: pd.DataFrame) -> dict:
+    """Count trades whose (entry_time, symbol) tuple appears in more than
+    one WF window. Indicates a position held across a window boundary
+    that vbt closed and re-opened — those bars contribute to two
+    windows' P&L when iterate.py stitches the equity for the dashboard.
+
+    Returns ``{}`` if the trade ledger lacks the ``window`` column
+    (single-split mode) or required key columns.
+    """
+    if tr_df is None or tr_df.empty:
+        return {}
+    cols = tr_df.columns
+    if "window" not in cols or "entry_time" not in cols or "symbol" not in cols:
+        return {}
+    # Group by (entry_time, symbol). A tuple appearing in >1 window
+    # is an overlap. We don't dedupe on price/size because the
+    # re-opened trade's price will be the next bar's open and the
+    # tuple already uniquely identifies the calendar bar.
+    grp = tr_df.groupby(["entry_time", "symbol"], dropna=False)["window"].nunique()
+    overlapping = grp[grp > 1]
+    overlap_count = int(len(overlapping))
+    if overlap_count == 0:
+        return {"overlap_count": 0, "n_trades_total": int(len(tr_df))}
+    # Pull the top few offenders for an at-a-glance look.
+    sample = []
+    for (et, sym), n_windows in overlapping.head(5).items():
+        rows = tr_df[(tr_df["entry_time"] == et) & (tr_df["symbol"] == sym)]
+        sample.append({
+            "entry_time": str(et),
+            "symbol": str(sym),
+            "n_windows": int(n_windows),
+            "windows": sorted([int(x) for x in rows["window"].unique()]),
+            "pnl_quote_sum": float(rows["pnl_quote"].sum())
+                if "pnl_quote" in cols else None,
+        })
+    return {
+        "overlap_count": overlap_count,
+        "n_trades_total": int(len(tr_df)),
+        "sample": sample,
+    }
+
+
 def _flags(diag: dict, summary: dict) -> list[str]:
     """Heuristic ✓/⚠/✗/ℹ markers — one-line, machine-scannable."""
     flags: list[str] = []
+
+    # WF trade overlap: surfaced first when present because it affects
+    # how the operator should read the rest of the numbers below
+    # (stitched equity is double-counting some bars' P&L).
+    wf_overlap = (diag.get("wf_overlap") or {}).get("overlap_count") or 0
+    if wf_overlap > 0:
+        flags.append(
+            f"⚠ {wf_overlap} trade(s) cross WF window boundary — "
+            f"stitched equity double-counts those bars' P&L"
+        )
 
     sh = float(summary.get("oos_sharpe") or 0)
     if sh >= 1.5:

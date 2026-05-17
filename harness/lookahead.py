@@ -179,6 +179,36 @@ def _perturb_bar(sub: dict[str, pd.DataFrame], target_sym: str,
     return out
 
 
+def _perturb_whole_symbol(sub: dict[str, pd.DataFrame], target_sym: str,
+                          factor: float) -> dict[str, pd.DataFrame]:
+    """Scale the SECOND HALF of ``target_sym``'s OHLCV by ``factor``.
+
+    Used by the cross-symbol isolation check: if perturbing one
+    symbol's later bars leaves other symbols' signal sequences
+    unchanged, the strategy treats them as independent.
+
+    Why scale only the second half: a uniform scale of *every* bar
+    is invariant under any pct_change / log-return / ratio
+    transformation (1.10·close[t] / 1.10·close[t-N] = close[t]/close[t-N]),
+    which is exactly what cross-sectional-momentum-style strategies
+    use. The first-half/second-half split breaks that invariance
+    while still preserving enough history for warmup. The first
+    half stays exactly as baseline so any leak shows up as a diff
+    in the FIRST half's signals on other symbols — that's where the
+    "did A's later data leak into B's earlier signal?" check lives.
+    """
+    out = {s: df.copy() for s, df in sub.items()}
+    df = out[target_sym]
+    cols_present = [c for c in OHLCV if c in df.columns]
+    half = len(df) // 2
+    if half < 1:
+        return out
+    df.iloc[half:, df.columns.get_indexer(cols_present)] = (
+        df.iloc[half:][cols_present].values * factor
+    )
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Public API
 # --------------------------------------------------------------------------- #
@@ -302,12 +332,76 @@ def audit(mod: Any, data: dict[str, pd.DataFrame], params: dict, *,
                 offending=diffs[:5],
             )
 
+    # ---- Cross-symbol isolation ----
+    # Perturb the SECOND HALF of each symbol's OHLCV and look at other
+    # symbols' signals. Two things to detect:
+    #   * Concurrent cross-symbol dependency — diffs in OTHER symbols'
+    #     signals in the second half. Legitimate for basket strategies
+    #     (pairs, xs momentum). Reported as advisory in
+    #     ``extra["cross_symbol_dependencies"]``.
+    #   * Cross-symbol lookahead — diffs in OTHER symbols' signals in
+    #     the FIRST half. The first half of all symbols is identical to
+    #     baseline, so any first-half diff means future data of one
+    #     symbol leaked into past signals of another. Treated as a real
+    #     LookaheadError (raises).
+    cross_symbol_deps: list[dict] = []
+    if len(symbols) >= 2:
+        half_idx = len(cidx) // 2
+        first_half_index = cidx[:half_idx] if half_idx > 0 else cidx[:0]
+        second_half_index = cidx[half_idx:]
+        for src in symbols:
+            perturbed = _perturb_whole_symbol(sub, src, factor=1.10)
+            sig_w = mod.generate_signals(perturbed, params)
+            sig_w_wide = _signals_to_wide(sig_w, symbols, cidx)
+            for tgt in symbols:
+                if tgt == src:
+                    continue
+                # First-half check — leak detection.
+                leak_diffs = _diff_positions(sig_orig_wide, sig_w_wide,
+                                             valid_index=first_half_index,
+                                             atol=atol)
+                if leak_diffs:
+                    first = leak_diffs[0]
+                    raise LookaheadError(
+                        f"cross-symbol: scaling the SECOND half of {src}'s OHLCV "
+                        f"by 1.10 changed the signal of {tgt} at {first[0]} "
+                        f"(first half of the audit window) from {first[2]} to "
+                        f"{first[3]}. Future bars of one symbol must not affect "
+                        f"past signals of another.",
+                        mode="cross_symbol_leak",
+                        offending=leak_diffs[:5],
+                    )
+                # Second-half check — advisory dependency report.
+                a_col = sig_orig_wide.loc[second_half_index, tgt].values
+                b_col = sig_w_wide.loc[second_half_index, tgt].values
+                both_nan = np.isnan(a_col) & np.isnan(b_col)
+                close = (~np.isnan(a_col) & ~np.isnan(b_col)
+                         & (np.abs(a_col - b_col) <= atol))
+                if (both_nan | close).all():
+                    continue
+                diff_n = int((~(both_nan | close)).sum())
+                cross_symbol_deps.append({
+                    "perturbed": src, "affected": tgt,
+                    "diff_bars_second_half": diff_n,
+                    "total_bars_second_half": int(len(a_col)),
+                })
+
+    notes = "all checks passed"
+    if cross_symbol_deps:
+        notes += (f"; cross-symbol dependencies detected ({len(cross_symbol_deps)} "
+                  f"pairs) — informational, OK for basket strategies, suspect "
+                  f"for per-symbol independent ones")
+
     return AuditReport(
         passed=True, sha256="",
         duration_seconds=time.time() - t0,
         n_symbols_tested=len(symbols),
         n_bars_tested=n,
         k_perturbations=len(bar_indices),
-        notes="all checks passed",
-        extra={"cutoff_idx": cutoff_idx, "perturbed_bars": [str(cidx[i]) for i in bar_indices]},
+        notes=notes,
+        extra={
+            "cutoff_idx": cutoff_idx,
+            "perturbed_bars": [str(cidx[i]) for i in bar_indices],
+            "cross_symbol_dependencies": cross_symbol_deps,
+        },
     )

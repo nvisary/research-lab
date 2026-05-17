@@ -191,6 +191,7 @@ def _run_audit(runs: Path, strategy_dir: Path, cfg: IterationConfig) -> tuple[bo
         }, indent=2), encoding="utf-8")
         return True, str(e), summary
 
+    cs_deps = (report.extra or {}).get("cross_symbol_dependencies", [])
     audit_log.write_text(json.dumps({
         "sha256": cur_hash,
         "passed": True,
@@ -200,12 +201,19 @@ def _run_audit(runs: Path, strategy_dir: Path, cfg: IterationConfig) -> tuple[bo
         "n_bars": report.n_bars_tested,
         "duration_seconds": report.duration_seconds,
         "notes": report.notes,
+        "cross_symbol_dependencies": cs_deps,
     }, indent=2), encoding="utf-8")
     return False, None, {
         "audit": "passed",
         "sha256": cur_hash,
         "k_perturbations": report.k_perturbations,
         "duration_seconds": report.duration_seconds,
+        # Informational — basket strategies expect this to be non-empty.
+        # Per-symbol independent strategies showing pairs here likely
+        # have a basket-level leak (e.g. accidentally reading another
+        # symbol's data when computing this one's signal).
+        "n_cross_symbol_dependencies": len(cs_deps),
+        "cross_symbol_dependencies": cs_deps,
     }
 
 

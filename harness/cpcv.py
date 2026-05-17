@@ -218,11 +218,20 @@ def evaluate_path(returns: pd.Series, equity: pd.Series,
         )
         n_trades_oos = int(trade_mask.sum())
 
+    # In-sample (train-side) Sharpe on the path. Needed by PBO/overfit
+    # diagnostics (harness.pbo.cpcv_overfit_stats) which compares the
+    # IS vs OOS rank of each path. Cheap — just mask & one Sharpe call.
+    is_mask = _intervals_mask(returns.index, path.train_intervals)
+    rets_is = returns[is_mask]
+    is_sharpe = _sharpe_on_concat(rets_is, tf) if not rets_is.empty else 0.0
+
     return {
         "test_groups": path.test_groups,
         "n_periods": int(len(rets_oos)),
+        "n_periods_is": int(len(rets_is)),
         "n_trades": n_trades_oos,
         "sharpe": _sharpe_on_concat(rets_oos, tf),
+        "is_sharpe": is_sharpe,
         "sortino": float(sortino(rets_oos, tf=tf)),
         "max_dd": float(max_drawdown(equity_oos)),
         "total_return": float(equity_oos.iloc[-1] / equity_oos.iloc[0] - 1.0),

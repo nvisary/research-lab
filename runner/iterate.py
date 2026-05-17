@@ -420,6 +420,68 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
     except Exception:
         dsr_value = 0.0
 
+    # ---- Research-integrity layer: bootstrap p-values + session overfit ----
+    # Persisted into the history row as `research_stats` so the UI can plot
+    # null distributions and the operator can scan p-values at a glance.
+    # All best-effort — never fail the iter on a bug here.
+    research_stats: dict | None = None
+    try:
+        from harness import bootstrap as _boot
+        from harness import multiple_testing as _mt
+        from harness import pbo as _pbo
+        from harness.metrics import _resolve_periods_per_year
+
+        if not error and 'oos_returns_concat' in locals() \
+                and len(oos_returns_concat.dropna()) >= 30:
+            # 1) Per-iter null-distribution p-values (block + permutation).
+            pv = _boot.both_pvalues(oos_returns_concat, n_boot=1000, tf=cfg.tf)
+
+            # 2) Harvey-Liu haircut Sharpe using iter_id as n_trials.
+            ppy = _resolve_periods_per_year(oos_returns_concat.dropna().index, cfg.tf)
+            hl = _mt.haircut_sharpe(
+                sharpe_ann=oos.get("sharpe", 0.0),
+                n_periods=int(len(oos_returns_concat.dropna())),
+                n_trials=iter_id,
+                periods_per_year=ppy,
+            )
+
+            # 3) Session overfit stats from history's (train_sharpe, oos_sharpe)
+            #    pairs accumulated so far (including this iter).
+            history_path = runs / "history.jsonl"
+            train_sh: list[float] = []
+            oos_sh: list[float] = []
+            if history_path.exists():
+                with history_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            row = json.loads(line)
+                            tr = (row.get("metrics_train") or {}).get("sharpe")
+                            os_ = (row.get("metrics_oos") or {}).get("sharpe")
+                            if tr is not None and os_ is not None:
+                                train_sh.append(float(tr))
+                                oos_sh.append(float(os_))
+                        except Exception:
+                            pass
+            # Include this iter's pair (history.jsonl is written after).
+            cur_train = (result.get("main") or {}).get("train", {}).get("sharpe")
+            if cur_train is not None and oos.get("sharpe") is not None:
+                train_sh.append(float(cur_train))
+                oos_sh.append(float(oos.get("sharpe", 0.0)))
+            session_overfit = _pbo.session_overfit_stats(train_sh, oos_sh)
+
+            # 4) Trial Sharpe summary for the UI histogram (driven by OOS).
+            ts_sum = _mt.trial_sharpe_summary(oos_sh)
+
+            research_stats = {
+                "bootstrap": pv,
+                "haircut_sharpe": hl,
+                "session_overfit": session_overfit,
+                "trial_sharpes": ts_sum,
+            }
+    except Exception as e:
+        traceback.print_exception(type(e), e, e.__traceback__)
+        research_stats = None
+
     best = _load_best(runs)
     best_score = best["composite"] if best else float("-inf")
     keep = composite > best_score + cfg.epsilon and error is None
@@ -524,6 +586,7 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "wf_aggregate": wf_agg,
         "dsr": dsr_value,
         "audit": audit_summary,
+        "research_stats": research_stats,
         "env": env_mod.capture(),
         "note": note,
         "error": error,
@@ -560,6 +623,28 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
         "capacity_warning": capacity_warning,
         "error": error,
     }
+
+    # Research-integrity highlights for the CLI (full details in
+    # row["research_stats"] -> history.jsonl). Keeps the per-iter
+    # summary scannable.
+    if research_stats:
+        rs = {}
+        bp = ((research_stats.get("bootstrap") or {}).get("block") or {}) \
+                .get("p_values") or {}
+        if bp:
+            rs["p_sharpe_block"] = round(bp.get("sharpe", 1.0), 4)
+            rs["p_max_dd_block"] = round(bp.get("max_dd", 1.0), 4)
+        hl = (research_stats.get("haircut_sharpe") or {}).get("bhy") or {}
+        if hl:
+            rs["bhy_haircut_sharpe"] = round(hl.get("sharpe", 0.0), 4)
+            rs["bhy_haircut_pct"] = round(hl.get("haircut_pct", 0.0), 4)
+        so = research_stats.get("session_overfit") or {}
+        if so.get("spearman_is_oos") is not None:
+            rs["session_spearman_is_oos"] = round(so["spearman_is_oos"], 4)
+        if so.get("logit_overfit") is not None:
+            rs["session_logit_overfit"] = round(so["logit_overfit"], 4)
+        if rs:
+            summary["research"] = rs
 
     # vs_best: deltas of all key metrics vs the prior best. Informative
     # only — doesn't drive keep/revert. Surfaces "composite +0.05 but

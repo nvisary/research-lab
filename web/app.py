@@ -667,6 +667,168 @@ def api_portfolio_list_strategies():
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Research-integrity endpoints — bootstrap p-values, haircut Sharpe, PBO.
+# --------------------------------------------------------------------------- #
+@app.get("/api/strategies/{name}/research-stats")
+def api_research_stats(name: str):
+    """Session-level research-integrity dashboard data.
+
+    Aggregates across the whole iter history:
+      - trial Sharpe summary (histogram + expected-max-under-null)
+      - session overfit stats (IS↔OOS Spearman/slope/logit_overfit)
+      - latest iter's bootstrap p-values (block + permutation)
+      - latest iter's Harvey-Liu haircut Sharpe (Bonferroni/Holm/BHY)
+
+    Source of truth: history.jsonl entries' `research_stats` block,
+    which is populated by runner.iterate.run_one. For sessions iterated
+    before this endpoint existed, returns whatever subset is available
+    (older rows lack research_stats — those iters are silently skipped).
+    """
+    from harness import multiple_testing as _mt
+    from harness import pbo as _pbo
+
+    history = _load_history(name)
+    if not history:
+        return _sanitize({"history_present": False})
+
+    # Pull all (train_sharpe, oos_sharpe) pairs (across the full history).
+    train_sh: list[float] = []
+    oos_sh: list[float] = []
+    for row in history:
+        tr = (row.get("metrics_train") or {}).get("sharpe")
+        os_ = (row.get("metrics_oos") or {}).get("sharpe")
+        if tr is not None and os_ is not None:
+            train_sh.append(float(tr))
+            oos_sh.append(float(os_))
+
+    trial_summary = _mt.trial_sharpe_summary(oos_sh)
+    session_overfit = (_pbo.session_overfit_stats(train_sh, oos_sh)
+                       if len(train_sh) >= 4 else None)
+
+    # Latest iter's persisted research_stats (already includes block
+    # bootstrap + haircut). Fall back to the most recent row that
+    # has the block populated.
+    latest_rs = None
+    latest_iter = None
+    for row in reversed(history):
+        rs = row.get("research_stats")
+        if rs and rs.get("bootstrap"):
+            latest_rs = rs
+            latest_iter = row.get("iter")
+            break
+
+    # Per-iter p-values trajectory for plotting over the session.
+    per_iter = []
+    for row in history:
+        rs = row.get("research_stats") or {}
+        block = ((rs.get("bootstrap") or {}).get("block") or {})
+        pvals = block.get("p_values") or {}
+        bhy = (rs.get("haircut_sharpe") or {}).get("bhy") or {}
+        per_iter.append({
+            "iter": row.get("iter"),
+            "verdict": row.get("verdict"),
+            "composite": row.get("composite"),
+            "oos_sharpe": (row.get("metrics_oos") or {}).get("sharpe"),
+            "dsr": row.get("dsr"),
+            "p_sharpe_block": pvals.get("sharpe"),
+            "p_max_dd_block": pvals.get("max_dd"),
+            "bhy_sharpe": bhy.get("sharpe"),
+            "bhy_haircut_pct": bhy.get("haircut_pct"),
+        })
+
+    return _sanitize({
+        "history_present": True,
+        "n_iters": len(history),
+        "trial_sharpes": trial_summary,
+        "session_overfit": session_overfit,
+        "latest": {"iter": latest_iter, "research_stats": latest_rs},
+        "per_iter": per_iter,
+    })
+
+
+@app.get("/api/strategies/{name}/cpcv")
+def api_cpcv_latest(name: str):
+    """Latest CPCV report for the strategy. None if never run."""
+    d = _strategy_dir(name)
+    cpcv_dir = d / "runs" / "cpcv"
+    if not cpcv_dir.exists():
+        return None
+    reports = sorted(cpcv_dir.glob("cpcv_*.json"))
+    if not reports:
+        return None
+    latest = reports[-1]
+    rep = json.loads(latest.read_text(encoding="utf-8"))
+    # Per-path table (sharpes & IS/OOS) for the IS-vs-OOS scatter plot.
+    parquet = latest.with_suffix(".parquet")
+    paths_table = None
+    if parquet.exists():
+        df = pd.read_parquet(parquet)
+        paths_table = df.to_dict(orient="records")
+    return _sanitize({"report": rep, "paths": paths_table,
+                      "report_file": latest.name})
+
+
+@app.get("/api/strategies/{name}/cpcv/list")
+def api_cpcv_list(name: str):
+    """List all CPCV report files for this strategy (most-recent first)."""
+    d = _strategy_dir(name)
+    cpcv_dir = d / "runs" / "cpcv"
+    if not cpcv_dir.exists():
+        return []
+    reports = sorted(cpcv_dir.glob("cpcv_*.json"), reverse=True)
+    out = []
+    for p in reports:
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+            out.append({
+                "file": p.name,
+                "iter": r.get("iter"),
+                "ran_at": r.get("ran_at"),
+                "n_paths": r.get("n_paths"),
+                "n_groups": r.get("n_groups"),
+                "k_test": r.get("k_test"),
+                "median_sharpe": (r.get("summary") or {}).get("median_sharpe"),
+                "overfit_verdict": r.get("overfit_verdict"),
+                "spearman_is_oos": (r.get("overfit") or {}).get("spearman_is_oos"),
+            })
+        except Exception:
+            pass
+    return _sanitize(out)
+
+
+class CpcvRequest(BaseModel):
+    start: str = "2024-01-01"
+    end: str = "2026-01-01"
+    tf: str | None = None
+    n_groups: int = 10
+    k_test: int = 2
+    embargo: str | None = "1D"
+    cost_model: str = "static"
+
+
+@app.post("/api/strategies/{name}/cpcv")
+def api_cpcv_run(name: str, body: CpcvRequest):
+    """Kick off a CPCV run as a background job. Returns the job descriptor
+    immediately; poll /api/jobs/{id} for completion and then /api/cpcv
+    for the report."""
+    _strategy_dir(name)
+    cmd = [
+        sys.executable, "-m", "runner.cpcv",
+        f"strategies/{name}",
+        "--start", body.start,
+        "--end", body.end,
+        "--n-groups", str(body.n_groups),
+        "--k-test", str(body.k_test),
+        "--cost-model", body.cost_model,
+    ]
+    if body.embargo:
+        cmd.extend(["--embargo", body.embargo])
+    if body.tf:
+        cmd.extend(["--tf", body.tf])
+    return _start_job(cmd).to_json()
+
+
 @app.get("/api/jobs")
 def api_jobs():
     with JOBS_LOCK:

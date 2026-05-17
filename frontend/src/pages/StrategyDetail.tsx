@@ -5,6 +5,7 @@ import {
   type EquityCurve,
   type HoldoutReport,
   type Job,
+  type ResearchStatsPayload,
   type StrategyDetail as Detail,
 } from "../api";
 import { fmt, fmtPct, probabilityClass, verdictClass } from "../format";
@@ -16,6 +17,8 @@ import { MonthlyReturnsHeatmap } from "../components/MonthlyReturnsHeatmap";
 import { QualityIndicators } from "../components/QualityIndicators";
 import { TradesCard } from "../components/TradesCard";
 import { Tooltip } from "../components/Tooltip";
+import { ResearchIntegrity } from "../components/ResearchIntegrity";
+import { CpcvCard } from "../components/CpcvCard";
 
 type IterForm = {
   start: string;
@@ -47,6 +50,7 @@ export function StrategyDetail() {
   const [form, setForm] = useState<IterForm>(defaultForm);
   const [job, setJob] = useState<Job | null>(null);
   const [holdout, setHoldout] = useState<HoldoutReport>(null);
+  const [research, setResearch] = useState<ResearchStatsPayload | null>(null);
   const [holdoutJob, setHoldoutJob] = useState<Job | null>(null);
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" }>({
     key: "iter", dir: "desc",
@@ -60,12 +64,14 @@ export function StrategyDetail() {
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [d, h] = await Promise.all([
+      const [d, h, rs] = await Promise.all([
         api.strategy(name),
         api.holdoutReport(name).catch(() => null),
+        api.researchStats(name).catch(() => null),
       ]);
       setDetail(d);
       setHoldout(h);
+      setResearch(rs);
       if (d.history.length > 0) {
         setSelectedIter((prev) => prev ?? d.history[d.history.length - 1].iter);
       }
@@ -557,6 +563,14 @@ export function StrategyDetail() {
         )}
       </Card>
 
+      <Card title="Research integrity">
+        <ResearchIntegrity data={research} />
+      </Card>
+
+      <Card title="Combinatorial Purged CV">
+        <CpcvCard name={name} />
+      </Card>
+
       <Card title="History">
         {sortedHistory.length === 0 ? (
           <em className="text-slate-500">no iterations yet</em>
@@ -566,7 +580,7 @@ export function StrategyDetail() {
             <table className="w-full text-sm">
               <thead className="text-slate-400 text-xs uppercase tracking-wider">
                 <tr>
-                  {(["iter","verdict","composite","OOS sharpe","OOS max DD","OOS trades","DSR","note","finished"] as const).map((k) => (
+                  {(["iter","verdict","composite","OOS sharpe","OOS max DD","OOS trades","DSR","p(Sh)","BHY Sh","note","finished"] as const).map((k) => (
                     <SortableTh key={k} label={k} sort={sort} onSort={onSort} />
                   ))}
                   <Th help="Open the standalone HTML tear sheet for this iteration in a new tab.">📊</Th>
@@ -589,6 +603,14 @@ export function StrategyDetail() {
                     <td className="px-3 py-1.5 mono">{fmtPct(h.metrics_oos?.max_dd)}</td>
                     <td className="px-3 py-1.5 mono">{h.metrics_oos?.n_trades ?? "—"}</td>
                     <td className={`px-3 py-1.5 mono ${probabilityClass(h.dsr)}`}>{fmt(h.dsr, 3)}</td>
+                    <td className={`px-3 py-1.5 mono ${pValueCls(h.research_stats?.bootstrap?.block?.p_values?.sharpe)}`}
+                        title="One-sided p-value under H0:no edge (stationary block bootstrap, mean re-centered)">
+                      {fmt(h.research_stats?.bootstrap?.block?.p_values?.sharpe, 3)}
+                    </td>
+                    <td className="px-3 py-1.5 mono text-slate-300"
+                        title="BHY-haircut Sharpe (Harvey-Liu, n_trials=iter_id)">
+                      {fmt(h.research_stats?.haircut_sharpe?.bhy?.sharpe, 2)}
+                    </td>
                     <td className="px-3 py-1.5 text-slate-300">{h.note || ""}</td>
                     <td className="px-3 py-1.5 text-slate-500 text-xs">
                       {h.finished ? new Date(h.finished).toLocaleString() : ""}
@@ -624,6 +646,14 @@ export function StrategyDetail() {
       <style>{`.input{background:#0f172a;border:1px solid #334155;border-radius:4px;padding:5px 8px;color:#e2e8f0;font:inherit}`}</style>
     </>
   );
+}
+
+function pValueCls(p: number | null | undefined): string {
+  if (p === null || p === undefined || Number.isNaN(p)) return "text-slate-500";
+  if (p < 0.01) return "text-emerald-400 font-semibold";
+  if (p < 0.05) return "text-emerald-300";
+  if (p < 0.1) return "text-amber-400";
+  return "text-rose-400";
 }
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {

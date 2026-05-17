@@ -38,6 +38,69 @@ export type Metrics = {
   kurt?: number | null;
 };
 
+export type BootstrapBlock = {
+  n_boot: number;
+  block_size: number;
+  method: "block" | "permutation";
+  observed: { sharpe: number; sortino: number; total_return: number; max_dd: number };
+  p_values: { sharpe: number; sortino: number; total_return: number; max_dd: number };
+  null_sharpe: {
+    mean: number;
+    std: number;
+    quantiles_05_25_50_75_95: number[];
+    hist_edges: number[];
+    hist_counts: number[];
+  };
+  null_max_dd: { mean: number; quantiles_05_25_50_75_95: number[] };
+};
+
+export type HaircutSection = {
+  p_value: number;
+  t_stat: number;
+  sharpe: number;
+  haircut_pct: number;
+};
+
+export type HaircutSharpe = {
+  n_trials: number;
+  n_periods: number;
+  raw: { sharpe: number; t_stat: number; p_value: number };
+  bonferroni: HaircutSection;
+  holm: HaircutSection;
+  bhy: HaircutSection;
+};
+
+export type SessionOverfit = {
+  n_iters: number;
+  spearman_is_oos: number | null;
+  slope_oos_on_is: number | null;
+  intercept_oos: number | null;
+  pct_is_top_half_below_oos_median: number | null;
+  logit_overfit: number | null;
+  is_median_sharpe?: number;
+  oos_median_sharpe?: number;
+  best_is_oos_gap: number | null;
+  selection_inflation: number | null;
+} | null;
+
+export type ResearchStats = {
+  bootstrap: { block: BootstrapBlock; permutation: BootstrapBlock | null };
+  haircut_sharpe: HaircutSharpe;
+  session_overfit: SessionOverfit;
+  trial_sharpes: {
+    n: number;
+    min?: number;
+    max?: number;
+    mean?: number;
+    median?: number;
+    std?: number;
+    expected_max_under_null?: number;
+    selection_premium?: number;
+    hist_edges?: number[];
+    hist_counts?: number[];
+  };
+} | null;
+
 export type HistoryRow = {
   iter: number;
   verdict: "KEEP" | "REVERT" | "BASELINE" | "ERROR" | string;
@@ -54,6 +117,7 @@ export type HistoryRow = {
     mode?: string;
     message?: string;
   } | null;
+  research_stats?: ResearchStats;
   note: string;
   finished: string;
   error: string | null;
@@ -321,4 +385,98 @@ export const api = {
   trades: (name: string, iter: number) =>
     j<TradesPayload>(`/api/strategies/${name}/trades/${iter}`),
   job: (id: string) => j<Job>(`/api/jobs/${id}`),
+  researchStats: (name: string) =>
+    j<ResearchStatsPayload>(`/api/strategies/${name}/research-stats`),
+  cpcvLatest: (name: string) =>
+    j<CpcvLatestPayload>(`/api/strategies/${name}/cpcv`),
+  cpcvList: (name: string) => j<CpcvListEntry[]>(`/api/strategies/${name}/cpcv/list`),
+  cpcvRun: (name: string, body: {
+    start: string; end: string; tf?: string | null;
+    n_groups: number; k_test: number;
+    embargo?: string | null; cost_model: string;
+  }) =>
+    j<Job>(`/api/strategies/${name}/cpcv`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+};
+
+export type ResearchStatsPayload = {
+  history_present: boolean;
+  n_iters?: number;
+  trial_sharpes?: {
+    n: number;
+    min?: number; max?: number; mean?: number; median?: number; std?: number;
+    expected_max_under_null?: number; selection_premium?: number;
+    hist_edges?: number[]; hist_counts?: number[];
+  };
+  session_overfit?: SessionOverfit;
+  latest?: { iter: number | null; research_stats: ResearchStats };
+  per_iter?: Array<{
+    iter: number;
+    verdict: string;
+    composite: number | null;
+    oos_sharpe: number | null;
+    dsr: number | null;
+    p_sharpe_block: number | null;
+    p_max_dd_block: number | null;
+    bhy_sharpe: number | null;
+    bhy_haircut_pct: number | null;
+  }>;
+};
+
+export type CpcvOverfit = {
+  n_paths: number;
+  spearman_is_oos: number | null;
+  slope_oos_on_is: number | null;
+  intercept_oos: number | null;
+  pct_is_top_half_below_oos_median: number | null;
+  logit_overfit: number | null;
+  is_median_sharpe?: number;
+  oos_median_sharpe?: number;
+};
+
+export type CpcvLatestPayload = {
+  report: {
+    iter: number;
+    ran_at: string;
+    period: [string, string];
+    tf: string;
+    symbols: string[];
+    n_groups: number;
+    k_test: number;
+    n_paths: number;
+    embargo: string;
+    cost_model: string;
+    summary: Record<string, any>;
+    overfit: CpcvOverfit;
+    overfit_verdict: string;
+    best_composite_train_val: number | null;
+  };
+  paths: Array<{
+    test_groups: string;
+    n_periods: number;
+    n_periods_is: number;
+    n_trades: number;
+    sharpe: number;
+    is_sharpe: number;
+    sortino: number;
+    max_dd: number;
+    total_return: number;
+    hit_rate: number;
+  }> | null;
+  report_file: string;
+} | null;
+
+export type CpcvListEntry = {
+  file: string;
+  iter: number;
+  ran_at: string;
+  n_paths: number;
+  n_groups: number;
+  k_test: number;
+  median_sharpe: number | null;
+  overfit_verdict: string | null;
+  spearman_is_oos: number | null;
 };

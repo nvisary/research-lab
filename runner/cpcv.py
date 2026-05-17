@@ -91,6 +91,17 @@ def run_cpcv(strategy_dir: Path, period_start: str, period_end: str,
         path_results.append(r)
     summary = summarize_paths(path_results)
 
+    # ---- Overfit / PBO diagnostics over the path matrix ----
+    # Compares per-path IS Sharpe with OOS Sharpe. Strategy-level
+    # generalisation check — if the strategy generalises, IS-best paths
+    # should also be OOS-strong. Healthy: spearman > 0.3 AND
+    # logit_overfit < 0 (see harness.pbo for thresholds).
+    from harness import pbo as _pbo
+    is_sharpes = [r.get("is_sharpe", 0.0) for r in path_results]
+    oos_sharpes = [r["sharpe"] for r in path_results]
+    overfit = _pbo.cpcv_overfit_stats(is_sharpes, oos_sharpes)
+    overfit_verdict = _pbo.overfit_flag(overfit)
+
     # ---- Persist ----
     started = datetime.now(timezone.utc)
     stamp = started.strftime("%Y%m%dT%H%M%SZ")
@@ -109,6 +120,8 @@ def run_cpcv(strategy_dir: Path, period_start: str, period_end: str,
         "n_paths": len(paths),
         "embargo": embargo,
         "summary": summary,
+        "overfit": overfit,
+        "overfit_verdict": overfit_verdict,
         "best_composite_train_val": (best or {}).get("composite"),
         "env": env_mod.capture(),
     }
@@ -122,8 +135,10 @@ def run_cpcv(strategy_dir: Path, period_start: str, period_end: str,
         rows.append({
             "test_groups": ",".join(map(str, r["test_groups"])),
             "n_periods": r["n_periods"],
+            "n_periods_is": r.get("n_periods_is", 0),
             "n_trades": r["n_trades"],
             "sharpe": r["sharpe"],
+            "is_sharpe": r.get("is_sharpe", 0.0),
             "sortino": r["sortino"],
             "max_dd": r["max_dd"],
             "total_return": r["total_return"],
@@ -171,6 +186,13 @@ def main() -> None:
         "pct_positive_sharpe": round(rep["summary"]["pct_positive_sharpe"], 1),
         "pct_above_1": round(rep["summary"]["pct_above_1"], 1),
         "worst_max_dd": round(rep["summary"]["worst_max_dd"], 4),
+        "overfit_verdict": rep.get("overfit_verdict"),
+        "spearman_is_oos": (round(rep["overfit"]["spearman_is_oos"], 4)
+                            if rep["overfit"].get("spearman_is_oos") is not None
+                            else None),
+        "slope_oos_on_is": (round(rep["overfit"]["slope_oos_on_is"], 4)
+                            if rep["overfit"].get("slope_oos_on_is") is not None
+                            else None),
         "best_composite_train_val": (round(rep["best_composite_train_val"], 4)
                                      if rep["best_composite_train_val"] is not None else None),
     }, indent=2))

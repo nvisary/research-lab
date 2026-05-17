@@ -15,6 +15,8 @@ export type Metrics = {
   max_dd?: number;
   cagr?: number;
   total_return?: number;
+  target_turnover?: number;
+  /** @deprecated emitted under ``target_turnover`` post-tier-1; kept for old history rows. */
   turnover?: number;
   hit_rate?: number;
   n_trades?: number;

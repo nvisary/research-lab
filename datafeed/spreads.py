@@ -75,8 +75,11 @@ def roll_spread_bps(close: pd.Series) -> tuple[float, bool]:
     if len(r) < 2:
         return SPREAD_FLOOR_BPS, True
 
-    # Lag-1 autocovariance. np.cov returns sample covariance with ddof=1.
-    cov = float(np.cov(r[1:], r[:-1], ddof=1)[0, 1])
+    # Lag-1 autocovariance Cov(r_{t-1}, r_t). np.cov returns sample
+    # covariance with ddof=1. Textbook argument order is (r[:-1], r[1:])
+    # — the previous form (r[1:], r[:-1]) is symmetric and numerically
+    # identical, but harder to verify against the canonical formula.
+    cov = float(np.cov(r[:-1], r[1:], ddof=1)[0, 1])
     if not np.isfinite(cov) or cov >= 0:
         return float("nan"), True   # caller should fallback
 

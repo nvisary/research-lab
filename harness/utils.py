@@ -111,5 +111,7 @@ def resample_higher(
     if shift_bars > 0:
         higher = higher.shift(shift_bars)
     if target_index is not None:
-        higher = higher.reindex(target_index, method="ffill")
+        # Two-step form: reindex().ffill() — the method="ffill" kwarg to
+        # reindex is deprecated in pandas 2.x and slated for removal.
+        higher = higher.reindex(target_index).ffill()
     return higher

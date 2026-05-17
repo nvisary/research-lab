@@ -20,7 +20,7 @@ TF_PERIODS_PER_YEAR: dict[str, float] = {
     "8h":    365.25 * 3,          # 1_095.75
     "12h":   365.25 * 2,          # 730.5
     "1d":    365.25,              # 365.25
-    "1w":    52.1429,
+    "1w":    365.25 / 7,              # 52.1786  (Julian year, consistent with rest of table)
 }
 
 
@@ -39,7 +39,10 @@ def _resolve_periods_per_year(index: pd.DatetimeIndex, tf: str | None) -> float:
     """
     if tf and tf in TF_PERIODS_PER_YEAR:
         return TF_PERIODS_PER_YEAR[tf]
-    # accept '60min' / '1H' / '1Min' aliases via pandas
+    # accept '60min' / '1H' / '1Min' aliases via pandas. Note that any
+    # parseable Timedelta string is accepted silently — including
+    # non-canonical cadences like "2h30min" — so callers should prefer
+    # the canonical strings in TF_PERIODS_PER_YEAR when possible.
     if tf:
         try:
             secs = pd.Timedelta(tf).total_seconds()
@@ -69,9 +72,19 @@ def sharpe(returns: pd.Series, tf: str | None = None) -> float:
 
 
 def sortino(returns: pd.Series, tf: str | None = None) -> float:
+    """Annualized Sortino. Returns ``inf`` when there are no losing bars and
+    the mean return is positive (zero-downside-risk, positive-edge case) —
+    mirrors the ``profit_factor`` convention so the "no losses" case is
+    monotone in strategy quality. Returns ``0.0`` for degenerate (n<2) or
+    zero-mean-and-no-loss inputs.
+    """
     r = returns.dropna()
+    if len(r) < 2:
+        return 0.0
     downside = r[r < 0]
-    if len(r) < 2 or downside.std(ddof=0) == 0 or len(downside) == 0:
+    if len(downside) == 0:
+        return float("inf") if r.mean() > 0 else 0.0
+    if downside.std(ddof=0) == 0:
         return 0.0
     return float(r.mean() / downside.std(ddof=0)
                  * np.sqrt(_resolve_periods_per_year(r.index, tf)))
@@ -103,7 +116,18 @@ def calmar(equity: pd.Series) -> float:
 
 
 def turnover(positions: pd.DataFrame) -> float:
-    """Average daily turnover (sum of |Δposition| per day, averaged across days)."""
+    """Average daily **target** turnover (sum of |Δtarget_position| per day,
+    averaged across days).
+
+    Note this counts every bar-over-bar shift in the *target* weight, not
+    realised executed trades — for strategies with continuous signals
+    (e.g. continuous CSM, z-band drift) the number reported here is
+    substantially larger than the count of fills in the trade ledger
+    suggests, because vbt only fires a trade when the target crosses a
+    fill threshold. The metric is emitted under the dict key
+    ``target_turnover`` in summary() to make this distinction explicit;
+    do NOT use it as a cost-model input.
+    """
     if positions.empty:
         return 0.0
     dpos = positions.diff().abs().sum(axis=1)
@@ -291,7 +315,17 @@ def quality_metrics(equity: pd.Series, returns: pd.Series,
     # ---- Monthly consistency ----
     if equity is not None and len(equity) >= 2:
         try:
+            # resample("MS").last() labels by month-start; the first bucket's
+            # .last() is the last equity value within a *partial* month
+            # (everything from equity.index[0] to end-of-that-month). If we
+            # included it in pct_change(), the first reported monthly return
+            # would mix partial-month-1 with month-2 — inflating the apparent
+            # return on whichever side has more bars. Drop the first label
+            # explicitly so reported monthly returns are over full calendar
+            # months only. Mirrors the heatmap fix in commit 0d034cd.
             monthly_eq = equity.resample("MS").last().dropna()
+            if len(monthly_eq) >= 2:
+                monthly_eq = monthly_eq.iloc[1:]
             if len(monthly_eq) >= 2:
                 m_ret = monthly_eq.pct_change().dropna()
                 if len(m_ret) >= 1:
@@ -476,7 +510,7 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
         "cagr": cagr(equity),
         "max_dd": max_drawdown(equity),
         "total_return": float(equity.iloc[-1] / equity.iloc[0] - 1.0) if len(equity) else 0.0,
-        "turnover": turnover(positions),
+        "target_turnover": turnover(positions),
         "hit_rate": hit_rate(returns),
         "n_trades": int(n_trades),
         "n_periods": int(len(returns)),
@@ -506,6 +540,12 @@ def composite_score(metrics: dict, dd_penalty: float = 0.5,
     if n == 0:
         return float("-inf")
     score = sh - dd_penalty * dd
+    # The ``if n < min_trades`` guard is LOAD-BEARING: without it,
+    # ``deficit = 1 - sqrt(n / min_trades)`` becomes negative for
+    # n > min_trades, which would silently *reward* high-trade-count
+    # strategies via the subtraction. The penalty is intentionally
+    # one-sided — once you've cleared the activity floor, more trades
+    # do not earn additional composite.
     if n < min_trades:
         deficit = 1.0 - math.sqrt(n / min_trades)
         score -= low_trades_penalty * deficit

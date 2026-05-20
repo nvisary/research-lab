@@ -638,6 +638,18 @@ def composite_score(metrics: dict, dd_penalty: float = 0.5,
     if tip is not None and tip < min_time_in_position:
         tip_deficit = 1.0 - max(float(tip), 0.0) / float(min_time_in_position)
         score -= time_in_position_penalty * tip_deficit
+    # Stitched-floor (single-window analogue): composite must agree in
+    # sign and rough magnitude with the OOS total return.
+    #   - lost money → composite cannot be better than the return
+    #   - made money → composite cannot be worse than the return
+    # See aggregate_wf_composite for the WF version.
+    total_return = metrics.get("total_return")
+    if total_return is not None:
+        tr = float(total_return)
+        if tr < 0.0 and score > tr:
+            score = tr
+        elif tr > 0.0 and score < tr:
+            score = tr
     return float(score)
 
 
@@ -651,16 +663,35 @@ def aggregate_wf_composite(window_metrics: list[dict],
     """Aggregate a list of per-window OOS metric dicts into a single composite.
 
     score = mean(window_composites) − stability_penalty · std(window_composites)
+           clamped above by stitched_oos_return when the latter is negative.
 
     The standard-deviation term rewards strategies whose OOS Sharpe is consistent
     across windows over those whose mean Sharpe is the same but driven by one
     lucky window. ``-∞`` is returned if any window scored ``-∞`` (e.g. zero
     trades) — we don't want to average an unbounded-bad result.
 
+    Stitched clamp (two-sided): the composite is constrained to agree
+    in sign and rough magnitude with the compounded OOS return across
+    windows. Specifically:
+
+      composite ≤ stitched_oos_return  when stitched < 0
+        (a strategy losing 30% stitched cannot score above -0.30,
+         no matter how clean per-window Sharpe looks)
+      composite ≥ stitched_oos_return  when stitched > 0
+        (a strategy earning +30% stitched gets at least +0.30, even
+         if Sharpe was dragged down by the stability penalty)
+
+    The negative-side clamp catches the failure mode where per-window
+    OOS Sharpe averages positive (because each window's starting
+    capital resets) but the stitched OOS equity is in drawdown.
+    The positive-side clamp mirrors it: real money earned should not
+    be downgraded by a metric that fixates on Sharpe-density alone.
+
     Returns
     -------
-    (score, agg) where agg is a dict of summary stats: mean_sharpe, std_sharpe,
-    median_sharpe, mean_max_dd, worst_max_dd, mean_n_trades, n_windows.
+    (score, agg) where agg is a dict of summary stats including
+    ``stitched_oos_return`` and ``composite_pre_stitched_floor`` so the
+    reader can see when the floor activated.
     """
     import numpy as np
 
@@ -679,6 +710,44 @@ def aggregate_wf_composite(window_metrics: list[dict],
     # for the degenerate single-window case so score == mean_c.
     std_c = float(np.std(composites, ddof=1)) if len(composites) >= 2 else 0.0
     score = mean_c - stability_penalty * std_c
+    score_pre_stitched = score
+
+    # ---- Stitched-floor guard ---------------------------------------
+    # Real-equity sanity: composite cannot exceed the OOS-stitched
+    # compounded return when that return is negative. Without this, a
+    # strategy can have positive per-window OOS Sharpe (windows
+    # averaging to a "positive" score) while the actual stitched OOS
+    # equity is in drawdown — because per-window starting capital
+    # resets each window and the bad-window losses don't compound
+    # into the average.
+    #
+    # Rationale (multiplicative-in-spirit): the penalty magnitude is
+    # proportional to the drawdown depth. composite is clamped above
+    # by stitched_total_return when the latter is negative — implying
+    # a strategy that lost 30% over the stitched OOS cannot score
+    # higher than -0.30, regardless of how lucky individual windows
+    # looked. A strategy that earned positive PnL is not affected.
+    total_returns_for_stitch = [m.get("total_return", 0.0) for m in window_metrics]
+    stitched_oos_compounded = 1.0
+    for r in total_returns_for_stitch:
+        try:
+            stitched_oos_compounded *= (1.0 + float(r))
+        except Exception:
+            pass
+    stitched_oos_return = stitched_oos_compounded - 1.0
+    # Symmetric clamp: composite must agree in sign and rough magnitude with
+    # the real OOS equity curve.
+    #   - composite ≤ stitched_oos_return when stitched < 0 (can't claim
+    #     "good Sharpe" while losing money)
+    #   - composite ≥ stitched_oos_return when stitched > 0 (can't claim
+    #     "mediocre" while actually earning meaningful PnL — a strategy
+    #     that returned +30% deserves at least +0.30 even if Sharpe was
+    #     dragged by stability penalty)
+    if stitched_oos_return < 0.0 and score > stitched_oos_return:
+        score = stitched_oos_return
+    elif stitched_oos_return > 0.0 and score < stitched_oos_return:
+        score = stitched_oos_return
+    # ---- end stitched-floor -----------------------------------------
 
     sharpes = [m.get("sharpe", 0.0) for m in window_metrics]
     dds = [m.get("max_dd", 0.0) for m in window_metrics]
@@ -748,6 +817,8 @@ def aggregate_wf_composite(window_metrics: list[dict],
         "mean_cagr": float(np.mean(cagrs)),
         "median_cagr": float(np.median(cagrs)),
         "mean_total_return": float(np.mean(total_returns)),
+        "stitched_oos_return": float(stitched_oos_return),
+        "composite_pre_stitched_floor": float(score_pre_stitched),
         "mean_bench_sharpe": float(np.mean(bench_sharpes_clean)) if bench_sharpes_clean else None,
         "mean_alpha_sharpe": float(np.mean(alphas_clean)) if alphas_clean else None,
         "median_alpha_sharpe": float(np.median(alphas_clean)) if alphas_clean else None,

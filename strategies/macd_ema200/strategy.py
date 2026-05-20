@@ -1,13 +1,14 @@
 """macd_ema200 — MACD signal-line crossover gated by EMA200 trend filter.
 
-Baseline thesis: classic textbook trend-following on BTCUSDT 1h.
+Baseline thesis: classic textbook trend-following.
 - MACD = EMA(fast) - EMA(slow); signal = EMA(MACD, signal_span).
 - Long when MACD crosses above signal AND close > EMA200 (uptrend regime).
 - Short when MACD crosses below signal AND close < EMA200 (downtrend regime).
 - Hold position between crossovers (state-machine style); flat when filter rejects.
 
-Single-symbol BTCUSDT 1h. Legacy sizing (no RAW_SIZING) → position in {-1, 0, +1}
-is fraction of an equal-weight slot; with one symbol that's the full equity.
+Symbol-agnostic: the same calculation is applied independently per symbol in
+``data``. DEFAULT_SYMBOLS pins the iter loop to BTCUSDT, but ``runner.sweep``
+can run this on any subset of the available universe to test robustness.
 """
 
 import numpy as np
@@ -36,9 +37,11 @@ PARAM_SPACE: dict = {
 }
 
 
-def generate_signals(data: dict, params: dict) -> pd.DataFrame:
-    df = data["BTCUSDT"]
+def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
+    """Per-symbol position series. Indexed by df's timestamp, values in
+    [-1, 1] after vol sizing + shift-by-one-bar trade-on-next-open."""
     close = df["close"]
+    high, low = df["high"], df["low"]
 
     fast = int(params.get("fast", 12))
     slow = int(params.get("slow", 26))
@@ -48,8 +51,6 @@ def generate_signals(data: dict, params: dict) -> pd.DataFrame:
     atr_period = int(params.get("atr_period", 14))
     vol_lookback = int(params.get("vol_lookback", 200))
     vol_q = float(params.get("vol_q", 0.70))
-
-    high, low = df["high"], df["low"]
 
     ema_fast = close.ewm(span=fast, adjust=False, min_periods=fast).mean()
     ema_slow = close.ewm(span=slow, adjust=False, min_periods=slow).mean()
@@ -81,10 +82,8 @@ def generate_signals(data: dict, params: dict) -> pd.DataFrame:
     short_pos = (macd < sig) & dn_regime & vol_ok
 
     # Vol-targeted sizing: scale by vol_target / current atr% (clipped to avoid
-    # explosive sizing in very-low-vol bars). Equal risk per trade rather than
-    # equal notional. Multiplier ≤ 1 in high-vol regimes, > 1 in low-vol but
-    # legacy sizing caps gross at 100% so effective range is [size_floor, 1].
-    vol_target = float(params.get("vol_target", 0.008))  # 1% per-bar ATR target
+    # explosive sizing in very-low-vol bars).
+    vol_target = float(params.get("vol_target", 0.008))
     size_floor = float(params.get("size_floor", 0.3))
     size_mult = (vol_target / atr_pct).clip(lower=size_floor, upper=1.0)
 
@@ -93,9 +92,20 @@ def generate_signals(data: dict, params: dict) -> pd.DataFrame:
     if not long_only:
         pos[short_pos] = -1.0
     pos = pos * size_mult.fillna(size_floor)
+    return pos.shift(1).fillna(0.0)
 
-    pos = pos.shift(1).fillna(0.0)
 
-    return pd.DataFrame(
-        {"timestamp": df.index, "symbol": "BTCUSDT", "position": pos.values}
-    )
+def generate_signals(data: dict, params: dict) -> pd.DataFrame:
+    frames = []
+    for symbol, df in data.items():
+        if df is None or df.empty:
+            continue
+        pos = _signals_for_symbol(df, params)
+        frames.append(pd.DataFrame({
+            "timestamp": df.index,
+            "symbol": symbol,
+            "position": pos.values,
+        }))
+    if not frames:
+        return pd.DataFrame(columns=["timestamp", "symbol", "position"])
+    return pd.concat(frames, ignore_index=True)

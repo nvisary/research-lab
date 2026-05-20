@@ -157,6 +157,18 @@ Total composite gain: **+5.7**. Sharpe trajectory: **-3.66 → +0.70**.
 - **Funding-data fetch** then add long-bias correction (needs user OK to run datafeed).
 - **Histogram-based signal** — MACD hist > 0 instead of MACD > signal.
 
+## Cross-asset (sweep) note — 2026-05-20
+Generalised `generate_signals` to iterate over `data.items()` instead of
+hardcoding `data["BTCUSDT"]`. Single-symbol BTC numbers unchanged
+(verified: Sharpe 2024=1.57 / 2025=2.04 match pre-refactor). This makes
+the strategy runnable through `runner.sweep` on any subset of the
+universe — first cross-asset look (BTC/ETH/SOL × 2024-2025, wf=1):
+BTC wins on both years; ETH and SOL are mixed-to-negative; the
+strategy is materially BTC-specific. Not yet a hypothesis to chase
+during iter (the iter loop stays pinned to BTCUSDT via
+DEFAULT_SYMBOLS); just a fact to keep in mind when interpreting
+"current champion" composites — single-symbol selection bias.
+
 ## Notes on the OOS regime
 The OOS window (~2025-07 → 2025-12) covers cycle-peak Q4-2025 flash crashes
 per AGENTS.md §2. Trend-following families are structurally weaker in

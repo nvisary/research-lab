@@ -475,6 +475,179 @@ export const api = {
       body: JSON.stringify(body),
     }),
   forwardSummary: () => j<ForwardSummaryRow[]>("/api/forward/summary"),
+  symbols: () => j<SymbolMeta[]>("/api/symbols"),
+  sweepRun: (name: string, body: SweepRunRequest) =>
+    j<Job>(`/api/strategies/${name}/sweep`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  sweepList: (name: string) =>
+    j<SweepListEntry[]>(`/api/strategies/${name}/sweep/list`),
+  sweepGet: (name: string, sweepId: string) =>
+    j<SweepPayload>(`/api/strategies/${name}/sweep/${sweepId}`),
+  sweepEquity: (name: string, sweepId: string, symbol: string, period: string) =>
+    j<SweepEquityCurve>(
+      `/api/strategies/${name}/sweep/${sweepId}/equity` +
+        `?symbol=${encodeURIComponent(symbol)}&period=${encodeURIComponent(period)}`
+    ),
+  sweepCorrelations: (name: string, sweepId: string) =>
+    j<SweepCorrelations | null>(
+      `/api/strategies/${name}/sweep/${sweepId}/correlations`
+    ),
+};
+
+// --------------------------------------------------------------------------- //
+// Sweep (cross-symbol × cross-period robustness matrix)
+// --------------------------------------------------------------------------- //
+export type SymbolMeta = {
+  symbol: string;
+  n_months: number;
+  first_month: string | null;
+  last_month: string | null;
+};
+
+export type SweepRunRequest = {
+  symbols?: string[];
+  all_symbols?: boolean;
+  all_symbols_covered?: boolean;
+  top_n?: number;
+  coverage_min?: number;
+  periods?: string[];
+  tf?: string;
+  wf?: number;
+  no_wf?: boolean;
+  cost_model?: string;
+  embargo?: string;
+  lookback?: string;
+  parallel?: number;
+  tag?: string;
+};
+
+export type SweepCellRow = {
+  symbol: string;
+  period: string;
+  period_start: string;
+  period_end: string;
+  sharpe: number | null;
+  max_dd: number | null;
+  n_trades: number | null;
+  total_return: number | null;
+  pct_time_in_position: number | null;
+  profit_factor: number | null;
+  expectancy: number | null;
+  information_ratio: number | null;
+  cvar_95: number | null;
+  max_participation_pct: number | null;
+  train_sharpe: number | null;
+  duration_s: number | null;
+  equity_path: string | null;
+  oos_returns_path: string | null;
+  error: string | null;
+};
+
+export type SweepPeriodReport = {
+  period: string;
+  n_cells: number;
+  n_cells_ok: number;
+  n_errors: number;
+  pct_sharpe_positive: number | null;
+  pct_return_positive: number | null;
+  median_sharpe: number | null;
+  mean_sharpe: number | null;
+  iqr_sharpe: number | null;
+  median_max_dd: number | null;
+  median_total_return: number | null;
+  top: Array<{ symbol: string; sharpe: number; max_dd: number; total_return: number }>;
+  bottom: Array<{ symbol: string; sharpe: number; max_dd: number; total_return: number }>;
+};
+
+export type SweepSymbolReport = {
+  symbol: string;
+  n_periods: number;
+  pct_positive_periods: number | null;
+  mean_sharpe: number | null;
+  min_sharpe: number | null;
+  max_sharpe: number | null;
+  mean_total_return: number | null;
+  worst_max_dd: number | null;
+};
+
+export type SweepReport = {
+  per_period: SweepPeriodReport[];
+  per_symbol: SweepSymbolReport[];
+  global: {
+    n_cells: number;
+    n_errors: number;
+    median_sharpe: number | null;
+    mean_sharpe: number | null;
+    pct_sharpe_positive: number | null;
+  };
+};
+
+export type SweepManifest = {
+  sweep_id: string;
+  strategy: string;
+  strategy_sha256: string;
+  created_at: string;
+  finished_at: string | null;
+  tag: string;
+  tf: string;
+  walk_windows: number;
+  no_wf: boolean;
+  cost_model: string;
+  embargo: string;
+  lookback: string;
+  symbols: string[];
+  periods: Array<{ label: string; start: string; end: string }>;
+  coverage_min: number;
+  selection_mode: string;
+  n_cells?: number;
+  n_errors?: number;
+  duration_s?: number;
+};
+
+export type SweepProgress = {
+  done: number;
+  total: number;
+  elapsed_s: number;
+};
+
+export type SweepPayload = {
+  manifest: SweepManifest;
+  report: SweepReport | null;
+  summary: SweepCellRow[];
+  progress: SweepProgress | null;
+};
+
+export type SweepListEntry = {
+  sweep_id: string;
+  created_at: string;
+  finished_at: string | null;
+  tag: string;
+  tf: string;
+  n_symbols: number;
+  n_periods: number;
+  n_cells: number | null;
+  n_errors: number | null;
+  duration_s: number | null;
+  selection_mode: string;
+  cost_model: string;
+  strategy_sha256: string;
+  global: SweepReport["global"] | null;
+  progress: SweepProgress | null;
+};
+
+export type SweepEquityCurve = {
+  timestamp: string[];
+  equity: number[];
+  benchmark: (number | null)[];
+  window?: number[];
+};
+
+export type SweepCorrelations = {
+  symbols: string[];
+  matrix: (number | null)[][];
 };
 
 // --------------------------------------------------------------------------- //

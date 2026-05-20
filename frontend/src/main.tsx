@@ -9,6 +9,7 @@ import { Portfolio } from "./pages/Portfolio";
 import { MultiStrat } from "./pages/MultiStrat";
 import { Features } from "./pages/Features";
 import { Forward } from "./pages/Forward";
+import { Sweep } from "./pages/Sweep";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -21,6 +22,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/multistrat" element={<MultiStrat />} />
           <Route path="/features" element={<Features />} />
           <Route path="/forward" element={<Forward />} />
+          <Route path="/sweep" element={<Sweep />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -12,5 +12,6 @@ frontend/dist/
 .claude/worktrees/
 strategies/**/runs/**
 !strategies/**/runs/.gitkeep
+strategies/**/sweeps/**
 # Top-level cross-strategy artefacts (multistrat reports etc.)
 /runs/

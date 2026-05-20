@@ -1222,6 +1222,234 @@ def api_forward_summary():
 
 
 # --------------------------------------------------------------------------- #
+# Sweep endpoints — cross-symbol × cross-period robustness matrix.
+# --------------------------------------------------------------------------- #
+class SweepRequest(BaseModel):
+    # Symbol selection — pick exactly one mode.
+    symbols: list[str] | None = None
+    all_symbols: bool = False
+    all_symbols_covered: bool = False
+    top_n: int | None = None
+    coverage_min: float = 0.90
+    # Periods (list of presets / "YYYY-MM:YYYY-MM").
+    periods: list[str] = ["2024", "2025", "2026"]
+    # Backtest knobs.
+    tf: str | None = None
+    wf: int = 1
+    no_wf: bool = False
+    cost_model: str = "static"
+    embargo: str = "1D"
+    lookback: str = "60D"
+    parallel: int | None = None
+    tag: str = ""
+
+
+@app.get("/api/symbols")
+def api_symbols():
+    """List symbols available on disk, plus a coarse coverage summary
+    over the 2024-01 .. 2026-05 span — drives the sweep symbol picker.
+    """
+    from datafeed.loader import available_symbols, DATA_ROOT
+    out = []
+    for sym in available_symbols():
+        d = DATA_ROOT / sym
+        try:
+            months = sorted(p.stem for p in d.glob("*.parquet"))
+        except Exception:
+            months = []
+        out.append({
+            "symbol": sym,
+            "n_months": len(months),
+            "first_month": months[0] if months else None,
+            "last_month": months[-1] if months else None,
+        })
+    return _sanitize(out)
+
+
+@app.post("/api/strategies/{name}/sweep")
+def api_sweep_run(name: str, body: SweepRequest):
+    """Kick off runner.sweep as a background job. Returns the job handle —
+    poll /api/jobs/{jid} for progress and parse the JSON tail for sweep_id."""
+    _strategy_dir(name)
+    cmd = [sys.executable, "-m", "runner.sweep", f"strategies/{name}"]
+
+    # Symbol selection — backend mirrors CLI exclusivity.
+    selection_count = sum([
+        bool(body.symbols), body.all_symbols,
+        body.all_symbols_covered, bool(body.top_n),
+    ])
+    if selection_count != 1:
+        raise HTTPException(400, "provide exactly one of: symbols / "
+                                 "all_symbols / all_symbols_covered / top_n")
+
+    if body.symbols:
+        cmd.append("--symbols")
+        cmd.extend(body.symbols)
+    elif body.all_symbols:
+        cmd.append("--all-symbols")
+    elif body.all_symbols_covered:
+        cmd.append("--all-symbols-covered")
+        cmd.extend(["--coverage-min", str(body.coverage_min)])
+    elif body.top_n:
+        cmd.extend(["--top", str(body.top_n)])
+
+    if body.periods:
+        cmd.append("--periods")
+        cmd.extend(body.periods)
+    if body.tf:
+        cmd.extend(["--tf", body.tf])
+    if body.no_wf:
+        cmd.append("--no-wf")
+    else:
+        cmd.extend(["--wf", str(body.wf)])
+    cmd.extend(["--cost-model", body.cost_model,
+                "--embargo", body.embargo,
+                "--lookback", body.lookback])
+    if body.parallel:
+        cmd.extend(["--parallel", str(body.parallel)])
+    if body.tag:
+        cmd.extend(["--tag", body.tag])
+
+    return _start_job(cmd).to_json()
+
+
+@app.get("/api/strategies/{name}/sweep/list")
+def api_sweep_list(name: str):
+    """List all completed sweeps for a strategy, newest first."""
+    d = _strategy_dir(name)
+    sweeps_dir = d / "sweeps"
+    if not sweeps_dir.exists():
+        return []
+    out = []
+    for sub in sorted([p for p in sweeps_dir.iterdir() if p.is_dir()],
+                       reverse=True):
+        mf = sub / "manifest.json"
+        if not mf.exists():
+            continue
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        # Lightweight headline metrics from report.json if present.
+        rep_path = sub / "report.json"
+        glob = None
+        if rep_path.exists():
+            try:
+                glob = (json.loads(rep_path.read_text(encoding="utf-8"))
+                        or {}).get("global")
+            except Exception:
+                pass
+        # Progress info for in-flight sweeps.
+        prog_path = sub / "progress.json"
+        progress = None
+        if prog_path.exists():
+            try:
+                progress = json.loads(prog_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        out.append({
+            "sweep_id": m.get("sweep_id") or sub.name,
+            "created_at": m.get("created_at"),
+            "finished_at": m.get("finished_at"),
+            "tag": m.get("tag"),
+            "tf": m.get("tf"),
+            "n_symbols": len(m.get("symbols") or []),
+            "n_periods": len(m.get("periods") or []),
+            "n_cells": m.get("n_cells"),
+            "n_errors": m.get("n_errors"),
+            "duration_s": m.get("duration_s"),
+            "selection_mode": m.get("selection_mode"),
+            "cost_model": m.get("cost_model"),
+            "strategy_sha256": m.get("strategy_sha256"),
+            "global": glob,
+            "progress": progress,
+        })
+    return _sanitize(out)
+
+
+def _sweep_dir(name: str, sweep_id: str) -> Path:
+    d = _strategy_dir(name) / "sweeps" / sweep_id
+    if not d.exists():
+        raise HTTPException(404, f"sweep '{sweep_id}' not found for '{name}'")
+    return d
+
+
+@app.get("/api/strategies/{name}/sweep/{sweep_id}")
+def api_sweep_get(name: str, sweep_id: str):
+    """Full sweep payload: manifest + report + summary rows."""
+    d = _sweep_dir(name, sweep_id)
+    manifest = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+    report = None
+    rep_path = d / "report.json"
+    if rep_path.exists():
+        report = json.loads(rep_path.read_text(encoding="utf-8"))
+    summary: list[dict] = []
+    sum_path = d / "summary.parquet"
+    if sum_path.exists():
+        try:
+            df = pd.read_parquet(sum_path)
+            summary = df.to_dict(orient="records")
+        except Exception:
+            pass
+    prog_path = d / "progress.json"
+    progress = None
+    if prog_path.exists():
+        try:
+            progress = json.loads(prog_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return _sanitize({
+        "manifest": manifest,
+        "report": report,
+        "summary": summary,
+        "progress": progress,
+    })
+
+
+@app.get("/api/strategies/{name}/sweep/{sweep_id}/equity")
+def api_sweep_equity(name: str, sweep_id: str, symbol: str, period: str):
+    """Equity curve for one (symbol, period) cell, downsampled for plotting."""
+    d = _sweep_dir(name, sweep_id)
+    fp = d / "equity" / f"{symbol}__{period}.parquet"
+    if not fp.exists():
+        raise HTTPException(404, "equity curve not found for that cell")
+    df = pd.read_parquet(fp)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.sort_values("timestamp")
+    # Downsample for the UI.
+    max_pts = 3000
+    if len(df) > max_pts:
+        step = (len(df) // max_pts) + 1
+        df = df.iloc[::step]
+    curve = {
+        "timestamp": [t.isoformat() for t in df["timestamp"]],
+        "equity": df["equity"].astype(float).tolist(),
+        "benchmark": [None if pd.isna(v) else float(v)
+                       for v in df["benchmark"]],
+    }
+    if "window" in df.columns:
+        curve["window"] = df["window"].astype(int).tolist()
+    return _sanitize(curve)
+
+
+@app.get("/api/strategies/{name}/sweep/{sweep_id}/correlations")
+def api_sweep_correlations(name: str, sweep_id: str):
+    """N×N OOS-returns correlation matrix across symbols (None if not computed)."""
+    d = _sweep_dir(name, sweep_id)
+    fp = d / "correlations.parquet"
+    if not fp.exists():
+        return None
+    df = pd.read_parquet(fp)
+    return _sanitize({
+        "symbols": [str(s) for s in df.columns],
+        "matrix": [[None if (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
+                     else float(v)
+                     for v in row]
+                    for row in df.values],
+    })
+
+
+# --------------------------------------------------------------------------- #
 # Feature store endpoints — list / metadata / preview / coverage.
 # --------------------------------------------------------------------------- #
 @app.get("/api/features")

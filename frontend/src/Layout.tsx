@@ -24,6 +24,9 @@ export function Layout() {
             <Link to="/forward" className="hover:text-slate-100">
               forward
             </Link>
+            <Link to="/sweep" className="hover:text-slate-100">
+              sweep
+            </Link>
           </nav>
         </div>
       </header>

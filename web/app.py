@@ -658,8 +658,9 @@ def api_tearsheet(name: str, iter_id: int):
 def api_trades(name: str, iter_id: int):
     """Return trade ledger for an iteration plus quick summary stats.
 
-    Capped at 1000 rows in the response to keep the dashboard fast; the
-    full ledger remains on disk at runs/trades/iter_NNNN.parquet.
+    Capped at 50000 rows in the response — enough for multi-symbol baskets
+    over multi-year periods (24 symbols * 24 months * ~500 trades = ~10k).
+    The full ledger remains on disk at runs/trades/iter_NNNN.parquet.
     """
     d = _strategy_dir(name)
     p = d / "runs" / "trades" / f"iter_{iter_id:04d}.parquet"
@@ -700,7 +701,7 @@ def api_trades(name: str, iter_id: int):
         if "pnl_quote" in df.columns else df.head(20)
     tail = df.sort_values("pnl_quote", ascending=True, na_position="last").head(20) \
         if "pnl_quote" in df.columns else df.tail(20)
-    rows = df.head(1000)
+    rows = df.head(50000)
 
     def _to_records(frame: pd.DataFrame) -> list[dict]:
         out_rows = []

@@ -61,7 +61,7 @@ export function TradesCard({ strategy, iter }: Props) {
         ))}
         <span className="text-slate-500 ml-auto self-center">
           {data.row_count_total} trades total
-          {data.row_count_total > 1000 && " (showing first 1000)"}
+          {data.row_count_total > 50000 && " (showing first 50000)"}
         </span>
       </div>
 

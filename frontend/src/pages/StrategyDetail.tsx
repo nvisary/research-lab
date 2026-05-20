@@ -65,8 +65,17 @@ export function StrategyDetail() {
   const pollTimer = useRef<number | null>(null);
   const holdoutPollTimer = useRef<number | null>(null);
   const autoRefreshTimer = useRef<number | null>(null);
+  // In-flight guard: auto-refresh fires every 5s, but a slow load() on a
+  // large universe (top-100 with many equity curves to fetch) can take
+  // longer than that. Without a guard, fetches stack up, each holding a
+  // copy of the response in flight, and Plotly re-renders pile up with
+  // half-stale data. Result: RAM balloons. This ref blocks a new load()
+  // from starting if a previous one hasn't finished.
+  const loadInFlight = useRef(false);
 
   const load = useCallback(async () => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     setRefreshing(true);
     try {
       const [d, h, rs] = await Promise.all([
@@ -84,6 +93,7 @@ export function StrategyDetail() {
       setError(String(e));
     } finally {
       setRefreshing(false);
+      loadInFlight.current = false;
     }
   }, [name]);
 

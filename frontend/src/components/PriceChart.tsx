@@ -301,6 +301,15 @@ export function PriceChart({ strategy, iter, symbols, start, end, tf }: Props) {
         {loading && <span className="text-slate-400 italic">loading…</span>}
       </div>
       <Plot
+        // Force a fresh Plotly instance whenever iter or symbol changes.
+        // Without this, react-plotly.js reuses the underlying div and
+        // Plotly accumulates internal WebGL/SVG buffers from prior
+        // datasets — over many refreshes on a heavy chart (e.g. top-100
+        // basket with ~16k trades and per-bar holding-period overlays)
+        // this can balloon to multi-GB JS heap. Re-keying the component
+        // makes React unmount the old <div> so Plotly can release its
+        // internal state.
+        key={`${strategy}|${iter ?? "none"}|${activeSymbol}`}
         data={traces}
         style={{ width: "100%", height: 380 }}
         useResizeHandler

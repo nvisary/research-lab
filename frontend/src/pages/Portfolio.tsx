@@ -287,37 +287,39 @@ function PortfolioReportView({ report }: { report: PortfolioReport }) {
           {corrTable.names.length === 0 ? (
             <em className="text-slate-500">no data</em>
           ) : (
-            <table className="text-xs">
-              <thead>
-                <tr>
-                  <th></th>
-                  {corrTable.names.map((n) => (
-                    <th key={n} className="px-2 py-1 text-slate-400 font-normal">{n}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {corrTable.names.map((row) => (
-                  <tr key={row}>
-                    <th className="px-2 py-1 text-slate-400 font-normal text-right">{row}</th>
-                    {corrTable.names.map((col) => {
-                      const v = corrTable.matrix[row]?.[col];
-                      const t = v === null ? 0 : Math.abs(v ?? 0);
-                      const bg = row === col ? "rgb(30, 41, 59)"
-                        : t > 0.7 ? "rgba(239, 68, 68, 0.5)"
-                        : t > 0.3 ? "rgba(245, 158, 11, 0.4)"
-                        : "rgba(34, 197, 94, 0.3)";
-                      return (
-                        <td key={col} className="px-2 py-1 text-center text-slate-100"
-                            style={{ background: bg, minWidth: 60 }}>
-                          {v === null ? "—" : v.toFixed(3)}
-                        </td>
-                      );
-                    })}
+            <div className="overflow-x-auto -mx-4 px-4">
+              <table className="text-xs">
+                <thead>
+                  <tr>
+                    <th></th>
+                    {corrTable.names.map((n) => (
+                      <th key={n} className="px-1.5 py-1 text-slate-400 font-normal whitespace-nowrap">{n}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {corrTable.names.map((row) => (
+                    <tr key={row}>
+                      <th className="px-1.5 py-1 text-slate-400 font-normal text-right whitespace-nowrap">{row}</th>
+                      {corrTable.names.map((col) => {
+                        const v = corrTable.matrix[row]?.[col];
+                        const t = v === null ? 0 : Math.abs(v ?? 0);
+                        const bg = row === col ? "rgb(30, 41, 59)"
+                          : t > 0.7 ? "rgba(239, 68, 68, 0.5)"
+                          : t > 0.3 ? "rgba(245, 158, 11, 0.4)"
+                          : "rgba(34, 197, 94, 0.3)";
+                        return (
+                          <td key={col} className="px-1.5 py-1 text-center text-slate-100 whitespace-nowrap"
+                              style={{ background: bg }}>
+                            {v === null ? "—" : v.toFixed(2)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>

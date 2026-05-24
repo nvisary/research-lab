@@ -674,9 +674,11 @@ def aggregate_wf_composite(window_metrics: list[dict],
     """Aggregate a list of per-window OOS metric dicts into a single composite.
 
     score = mean(window_composites) − stability_penalty · std(window_composites)
-           + stitched_weight · stitched_oos_return
-           clamped above by stitched_oos_return when the latter is negative,
-           clamped below by stitched_oos_return when it is positive.
+           + stitched_weight · stitched_floor
+           clamped by stitched_floor (sign-agreement: composite ≤ floor
+           when floor < 0, composite ≥ floor when floor > 0). The
+           floor is min(stitched_full_return, stitched_oos_return) so
+           a strategy must survive BOTH views of the 24mo P&L.
 
     The standard-deviation term rewards strategies whose OOS Sharpe is consistent
     across windows over those whose mean Sharpe is the same but driven by one
@@ -741,45 +743,61 @@ def aggregate_wf_composite(window_metrics: list[dict],
     # a strategy that lost 30% over the stitched OOS cannot score
     # higher than -0.30, regardless of how lucky individual windows
     # looked. A strategy that earned positive PnL is not affected.
-    # The "24mo stitched" P&L the dashboard surfaces is the compounded
-    # product of per-window equity end/start ratios over the FULL
-    # [train_start, oos_end) span of each window — not the OOS-only
-    # slice. We mirror that here so the composite floor aligns with
-    # what the operator sees in TrustVerdictBanner. Each window
-    # contributes ``total_return_full`` when present (set in
-    # backtest.run_split); we fall back to ``total_return`` (OOS-only)
-    # for older payloads or single-window paths.
-    total_returns_for_stitch = []
-    for m in window_metrics:
-        v = m.get("total_return_full")
-        if v is None:
-            v = m.get("total_return", 0.0)
-        total_returns_for_stitch.append(v)
+    # Two complementary "stitched" views of the 24mo P&L. Both are
+    # honest for static strategies in non-overlapping WF (which is the
+    # default); they disagree when the calendar happens to make
+    # train slices look different from OOS slices.
+    #
+    #   stitched_full_return  — compound of per-window
+    #     [train_start, oos_end) ratios. For static strategies in
+    #     non-overlapping WF, this equals the real 24mo P&L of a single
+    #     continuous run. This is also what the dashboard surfaces as
+    #     "Stitched 24mo P&L".
+    #
+    #   stitched_oos_return   — compound of per-window OOS-only returns.
+    #     Captures whether the strategy works *specifically in the OOS
+    #     calendar slices* the agent doesn't tune against (well, less
+    #     directly). A calendar-correlated failure mode where the last
+    #     1/N of each window underperforms shows up here but is hidden
+    #     in stitched_full.
+    #
+    # The composite floor uses ``stitched_floor = min(full, oos)`` so a
+    # strategy must survive BOTH views: it cannot post a positive
+    # composite if either view is negative, and it gets the worse of
+    # the two as its additive pull. This catches calendar bias that
+    # full-period stitching hides AND regime failure that OOS-only
+    # stitching misses.
+    stitched_full_compounded = 1.0
     stitched_oos_compounded = 1.0
-    for r in total_returns_for_stitch:
+    for m in window_metrics:
+        tr_oos = m.get("total_return", 0.0)
+        tr_full = m.get("total_return_full")
+        if tr_full is None:
+            tr_full = tr_oos  # legacy payload fallback
         try:
-            stitched_oos_compounded *= (1.0 + float(r))
+            stitched_full_compounded *= (1.0 + float(tr_full))
         except Exception:
             pass
+        try:
+            stitched_oos_compounded *= (1.0 + float(tr_oos))
+        except Exception:
+            pass
+    stitched_full_return = stitched_full_compounded - 1.0
     stitched_oos_return = stitched_oos_compounded - 1.0
-    # Additive pull (magnitude matters): the 24mo stitched return moves
-    # the composite proportionally, not just as a one-sided clamp. A
-    # strategy with -30% stitched OOS gets -0.30 deducted from its
-    # composite directly, on top of any per-window penalties; a +30%
-    # earns +0.30 of additive lift.
-    score = score + stitched_weight * stitched_oos_return
-    # Hard sign-agreement rule: stitched OOS return dictates the sign
-    # and magnitude bracket of the composite.
-    #   - stitched < 0  → composite ≤ stitched_oos_return  (a strategy
-    #     that lost money over the full stitched OOS CANNOT show a
-    #     positive composite, no matter how clean per-window Sharpe was)
-    #   - stitched > 0  → composite ≥ stitched_oos_return  (a strategy
-    #     that earned meaningful PnL is not downgraded below its real
-    #     return by Sharpe-density penalties)
-    if stitched_oos_return < 0.0 and score > stitched_oos_return:
-        score = stitched_oos_return
-    elif stitched_oos_return > 0.0 and score < stitched_oos_return:
-        score = stitched_oos_return
+    stitched_floor = min(stitched_full_return, stitched_oos_return)
+    # Additive pull by the worse view — magnitude penalty proportional
+    # to whichever stitched is more negative (or less positive).
+    score = score + stitched_weight * stitched_floor
+    # Hard sign-agreement rule against the worse view:
+    #   - stitched_floor < 0  → composite ≤ stitched_floor  (a strategy
+    #     that loses money in EITHER stitched view cannot post a
+    #     positive composite)
+    #   - stitched_floor > 0  → composite ≥ stitched_floor  (both views
+    #     positive → composite is at least the smaller of the two)
+    if stitched_floor < 0.0 and score > stitched_floor:
+        score = stitched_floor
+    elif stitched_floor > 0.0 and score < stitched_floor:
+        score = stitched_floor
     # ---- end stitched-floor -----------------------------------------
 
     sharpes = [m.get("sharpe", 0.0) for m in window_metrics]
@@ -850,7 +868,9 @@ def aggregate_wf_composite(window_metrics: list[dict],
         "mean_cagr": float(np.mean(cagrs)),
         "median_cagr": float(np.median(cagrs)),
         "mean_total_return": float(np.mean(total_returns)),
+        "stitched_full_return": float(stitched_full_return),
         "stitched_oos_return": float(stitched_oos_return),
+        "stitched_floor": float(stitched_floor),
         "composite_pre_stitched_floor": float(score_pre_stitched),
         "mean_bench_sharpe": float(np.mean(bench_sharpes_clean)) if bench_sharpes_clean else None,
         "mean_alpha_sharpe": float(np.mean(alphas_clean)) if alphas_clean else None,

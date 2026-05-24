@@ -26,11 +26,15 @@ DEFAULT_PARAMS: dict = {
     "rsi_low": 30,
     "rsi_high": 70,
     "vol_target": 0.012,
+    "ema_trend_period": 200,
+    "counter_trend_size": 0.25,
 }
 
 PARAM_SPACE: dict = {
     "bb_period": (10, 20),
     "rsi_period": (7, 14),
+    "ema_trend_period": (100, 400),
+    "counter_trend_size": (0.0, 0.7),
 }
 
 
@@ -91,7 +95,28 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     vol_target = float(params.get("vol_target", 0.012))
     size_mult = (vol_target / atr_pct).clip(lower=0.3, upper=1.0)
 
-    return (pos * size_mult).shift(1).fillna(0.0)
+    # 3b. Counter-trend size dampener
+    ema_p = int(params.get("ema_trend_period", 200))
+    ema_trend = close.ewm(span=ema_p, adjust=False).mean()
+    uptrend = (close > ema_trend).astype(float)
+    downtrend = (close < ema_trend).astype(float)
+    ct_size = float(params.get("counter_trend_size", 0.25))
+    regime_mult = pd.Series(1.0, index=df.index)
+    regime_mult = regime_mult.where(~((pos > 0) & (downtrend > 0)), ct_size)
+    regime_mult = regime_mult.where(~((pos < 0) & (uptrend > 0)), ct_size)
+
+    # 3c. ATR stop-loss tracker — exit when running loss exceeds 2.5*ATR from entry
+    # Compute trailing entry price by tracking position changes
+    pos_change = pos.diff().fillna(pos)
+    is_entry = (pos != 0) & ((pos.shift(1).fillna(0) == 0) | (np.sign(pos) != np.sign(pos.shift(1).fillna(0))))
+    entry_price = close.where(is_entry).ffill()
+    atr_at_entry = atr.where(is_entry).ffill()
+    # Loss vs entry (positive = adverse move)
+    adverse = (entry_price - close) * np.sign(pos)  # positive = bad
+    stop_hit = adverse > (2.5 * atr_at_entry)
+    pos_stopped = pos.where(~stop_hit, 0.0)
+
+    return (pos_stopped * size_mult * regime_mult).shift(1).fillna(0.0)
 
 
 def generate_signals(data: dict, params: dict) -> pd.DataFrame:

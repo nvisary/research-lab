@@ -18,89 +18,117 @@ to a short-window mean on 15m more reliably than they trend.
 DOGE, AVAX, LINK, DOT, TRX, BCH, NEAR, ATOM, XLM, OP, INJ, SUI, TIA, SEI, UNI,
 FIL, HBAR, ICP, LDO, CRV, SAND, AXS, IMX, ETC.
 
-All verified to have full 2024-01 → 2026-04 monthly coverage on disk. LTCUSDT
-was considered and dropped (only 16 of 28 months available).
+## Iteration log (session 2 — May 2026, new scoring with stitched-floor)
 
-## Caveats noted up-front
-- **Survivorship bias.** All 24 names are currently-listed Bybit perps. Mid-cap
-  alts that delisted between 2024 and 2026 (and would have been in a real-time
-  basket) are not represented. Discount XS Sharpe accordingly.
-- **No funding parquets on disk** (`data/bybit/funding/` is absent for these
-  symbols — confirm). Net-long bias inflates equity by ~funding mean. MR
-  strategies tend toward symmetric L/S so impact is smaller than for trend, but
-  still real.
-- **Costs are the dominant risk.** 5.5 bps taker × frequent reversion entries
-  on 24 symbols can easily eat any z-score edge. The harness applies fees;
-  watch composite vs gross.
-- **15m TF = ~70k bars per symbol × 24 symbols.** Heavy load. If iteration time
-  hurts, drop universe to 12 highest-volume names first, not coarser TF.
+Started from iter 1 baseline (composite -0.605, mean OOS Sharpe +0.52, stitched
+**-47.4%**). Session 1's old iter 2-10 history (in earlier program.md) was
+under the old composite formula and is now superseded — they're listed below
+as priors for context.
 
-## Planned iteration directions (priority order)
-1. Establish baseline at default params (z=96, k=2.0/0.5), confirm no LOOKAHEAD_BUG.
-2. Z-window sweep — is 24h the right baseline window? Try 48 / 96 / 192 / 384 (12h–4d).
-3. Entry / exit threshold sweep — does asymmetric `entry_k` for long vs short help?
-4. Long-only vs symmetric — given crypto long-bias + no funding data, shorts may bleed.
-5. Volatility-band gate — only trade when ATR%/close is in middle quantiles (skip dead chop AND blow-ups).
-6. Volume / liquidity gate — skip symbols whose recent volume is in bottom decile of their own history.
-7. Cross-sectional ranking — instead of independent z per symbol, rank residual returns and trade top/bottom decile.
-8. Higher-TF trend gate — only fade when 4h trend is flat (range regime), skip when 4h is trending.
-9. Stop-loss on `|z|` exceeding extreme threshold (catastrophic continuation).
+| # | Verdict | Composite | OOS Sharpe | Stitched% | MaxDD | n_trades | TiP% | Note |
+|---|---------|-----------|------------|-----------|-------|----------|------|------|
+| 1 | BASELINE | -0.605 | +0.52 | **-47.4%** | 12% | 639 | 90% | regime_q=0.3, vol_floor_q=0.2, entry_k=2.0 |
+| 2 | REVERT | -13.67 | -10.3 | -100% | 59% | 5113 | 100% | XS-ranking (long bottom-4 z, short top-4 z) — catastrophic turnover, every bucket -ve |
+| 3 | REVERT | -6.14 | -3.82 | -56% | 15% | 862 | 32% | return-based z (4-bar logret excursion vs 24h dist) — MR mechanism breaks on log-ret |
+| 4 | REVERT | -1.89 | +0.09 | -51% | 12% | 650 | 73% | + 8h time-stop — heals regime decomp (5 healthy buckets) but stitched worse |
+| 5 | **KEEP** | -0.513 | +1.00 | -31.9% | 10% | 437 | 79% | vol_floor_q 0.2→0.5 (above-median ATR only) — +15.5pp stitched, 4 healthy flat buckets glow |
+| 6 | **KEEP** | -0.397 | +0.65 | -20.2% | 8% | 313 | 72% | regime_quantile 0.3→0.2 (tighter flat-only) — +11.7pp stitched, bear/bull buckets less lossy |
+| 7 | REVERT | -0.66 | +0.21 | -21.7% | 8% | 200 | 61% | entry_k 2.0→2.5 — fewer trades, hit-rate up but stitched flat |
+| 8 | REVERT | -2.80 | -0.57 | -24.5% | 8% | 328 | 61% | + 3·ATR price-stop — stop crystallizes losses that would have reverted (same lesson as old z-stop) |
+| 9 | **KEEP** | -0.337 | +0.43 | **-19.6%** | 7% | 245 | 65% | regime_quantile 0.2→0.15 — best stitched of session, 12/12 monthly green/red |
+| 10 | REVERT | -0.92 | -0.27 | -18.9% | 7% | 166 | 55% | regime_quantile 0.15→0.10 — too tight, OOS Sharpe goes -ve |
 
-## Iteration log
+**Current best (iter 9):** composite -0.337, OOS Sharpe +0.43, stitched **-19.6%**
+(vs baseline -47.4% = **+27.8pp improvement**), MaxDD 7%, 245 trades, TiP 65%,
+PF 1.04 on prev-best comparison, payoff ratio 0.51, hit-rate 64%.
 
-| # | Verdict | Composite | OOS Sharpe | MaxDD | n_trades | TiP% | TotalRet | DSR | Note |
-|---|---------|-----------|------------|-------|----------|------|----------|-----|------|
-| 1 | BASELINE | -0.923 | 0.007 | 21% | 1272 | 99% | -0.6% | 0.52 | z=96, k=2.0/0.5 symmetric L/S — Sharpe ~0, regime table shows MR only in flat |
-| 2 | KEEP | -0.654 | 0.243 | 17% | 1044 | 96% | +1.6% | 0.41 | +4h trend-gate q=0.5 — modest win, bear/bull buckets ~unchanged |
-| 3 | KEEP | -0.139 | 0.406 | 14% | 756 | 92% | +1.5% | **0.61** | regime gate q=0.5→0.3 — biggest jump; PF 1.02; DSR peak |
-| 4 | REVERT | -6.68 | -5.02 | 10% | 800 | 38% | -5.7% | 0.00 | regime-exit on flip-out-of-flat — **breaks MR mechanism**, all buckets red |
-| 5 | REVERT | -1.20 | -0.17 | 13% | 822 | 91% | +0.1% | 0.02 | z-stop at |z|>4 — also breaks MR, crystallizes losses that would have reverted |
-| 6 | KEEP | -0.129 | 0.517 | 12% | 639 | 90% | +1.9% | 0.05 | +vol-floor q=0.2 (skip low-ATR entries) — marginal (Δ=0.01); stitched -47% flag |
-| 7 | REVERT | -1.02 | -0.37 | 25% | 327 | 88% | -2.9% | 0.01 | z_window 96→192 — halved trades, flat-bucket Sharpe up but bear-bucket -17 |
-| 8 | REVERT | -0.27 | 0.28 | 11% | 450 | 79% | +0.9% | 0.04 | asymmetric short_k=3.0 — bull-buckets healed (-6→0), but trade volume -30%, Sharpe down |
-| 9 | REVERT | -1.91 | -0.67 | 15% | 1123 | 90% | -1.4% | 0.01 | z_window 96→48 — confirms 96 is concave optimum; noisier signal |
-| 10 | REVERT | -1.12 | -0.20 | 11% | 355 | 58% | -0.2% | 0.03 | long_only=1 — **best stitched -19.9%**, 8/12 buckets healthy, BUT lower TiP kills Sharpe |
+Params: `z_window=96, entry_k=2.0, exit_k=0.5, regime_quantile=0.15, vol_floor_q=0.5, regime_lb_days=30, trend_ema=50, trend_slope_window=5, atr_period=14`.
 
-Current best: **iter 6** (composite -0.129, regime+vol entry filters, symmetric L/S).
-Highest-DSR: iter 3 (still has the strongest statistical defensibility).
+## Best stitched achieved this session
 
-## What's been ruled out
+**-19.6%** at iter 9 (down from -47.4% baseline = +27.8pp). The winning
+direction was **regime concentration**: keep only the entries that fall in
+high-vol + tight-flat regimes where MR works (the regime decomp consistently
+shows flat-trend buckets with Sharpe +3 to +9, while bull/bear trend buckets
+bleed -3 to -14).
 
-After 10 iterations on this hypothesis-family (15m z-score MR on 24 mid-cap
-alts + entry filters), the strategy is **structurally PF≈1.0 wall**:
+## What worked
 
-- Two natural defenses (regime-exit, z-stop) **both break the MR mechanism**
-  itself — they realize losses on moves that would have reverted. Lesson: do
-  not use the same signal-family (z, regime) for both entry and forced exit.
-- z_window is concave around 96 (24h baseline). Both 48 and 192 made it worse.
-- Asymmetric short threshold and long_only **structurally improve** the equity
-  curve, regime decomposition, monthly streaks, and stitched return — but
-  hurt the OOS-Sharpe composite because they reduce trade frequency / TiP.
-  This is a notable mismatch: by composite, iter 6 wins; by stitched 24-month
-  equity (-19.9% vs -47.4%), iter 10 (long_only) wins.
-- Win rate is stable around 64%, payoff ratio ~0.5, PF stuck at 0.85-1.04.
-  Trade-shape ceiling: ~+0.15% per trade gross, less than 2× round-trip cost.
+1. **Vol floor raised** (0.2 → 0.5 ATR% quantile). Concentrates trades in
+   v3/v4 buckets where MR edge is strongest. +15.5pp stitched.
+2. **Regime tighter** (0.3 → 0.15 |slope| quantile). Reduces bull/bear bucket
+   entries. +12.3pp stitched cumulatively.
 
-## Open hypotheses worth trying (NOT yet tested)
+These two single-knob tightening edits compound to flip the strategy from
+deeply-bleeding to mildly-bleeding. Neither involves new signal families —
+they are pure filter concentration.
 
-Anything below would be a NEW hypothesis-family, not a parameter tweak:
+## What was ruled out (this session)
 
-1. **Return-based z** instead of price-z — `z = (logret - mean(logret)) / std(logret)`.
-   Decoupled from price drift, may catch reversion more cleanly.
-2. **Volume confirmation** at entry — only fade z<-entry_k when volume in
-   top quartile of recent (panic-capitulation signature).
-3. **Cross-sectional ranking** instead of independent z per symbol — at each
-   bar, rank residual returns across the basket, long bottom decile vs short
-   top decile, market-neutral.
-4. **Replace z-score with Connors RSI(2) / RSI(3)** — different signal
-   architecture; literature is dense with RSI-MR results on equities.
-5. **Holding-time exit** as alternative — close after N bars regardless of z.
-   Cuts the tail risk without crystallizing on z-events.
-6. **5m TF on the same universe** — user wants high frequency; 5m would 3x
-   the bar count, but cost-per-trade becomes structurally lethal at 5.5bps.
-   Test only after a confirmed edge on 15m.
+- **Cross-sectional ranking (rank-based XS-MR).** Catastrophic: 5113 trades,
+  every regime bucket negative, -100% stitched. The constant rank churn on
+  15m bars is structurally lossy after fees. Verdict: **dead end**.
+- **Return-based z** (logret excursion). Worse than price-z (-56% stitched).
+  The 4-bar return is too noisy to support MR; the rolling-z normalization
+  decouples from price drift but the underlying edge isn't there.
+- **Time-based stop (8h max hold).** Healed regime decomp dramatically (5/12
+  healthy buckets, all flat buckets glow) but **stitched got worse** (-51%
+  vs -47%). The time-stop crystallizes losses in mid-revert. Lesson: any
+  "force exit" that's not signal-based crystallizes paper losses.
+- **ATR-based price stop (3·ATR).** Same failure mode as time-stop: cuts
+  positions that would have reverted. Verdict: **same family of failure as
+  z-stop from session 1** — stops are structurally incompatible with this
+  MR mechanism.
+- **Tighter entry_k (2.0 → 2.5).** Fewer/cleaner trades but no stitched
+  improvement; not worth the lost TiP.
+- **regime_quantile 0.10.** Too tight — OOS Sharpe goes -ve. Concave
+  optimum around 0.15.
 
-## Recommendation
-Pause incremental tuning. Pick one of the structural changes above
-(strong priors: #3 cross-sectional ranking or #1 return-based z) — they
-test a different inefficiency, not refinements of the same one.
+## Honest assessment
+
+The strategy is **marginal but not structurally dead**. We've moved stitched
+from -47% to -20% (worst case before stitched-floor scoring) — a 27pp
+improvement. But:
+
+- Profit factor is **still 0.85–0.91** across all KEEPs. After fees+funding
+  the trade-shape is fundamentally lossy; the regime filters merely reduce
+  the bleed rate.
+- Per-trade expectancy in cents is **negative** ($-0.42 to $-0.74 per trade).
+- The strategy "wins" only because regime gates suppress most of its bad
+  trades. The underlying MR signal hasn't been shown to have edge net of
+  costs on this universe.
+- All KEEP iters carry the flag "OOS Sharpe positive but stitched negative —
+  edge lives in OOS slices only, suspect WF calendar bias". The mean OOS
+  Sharpe is propped up by W1 (2024-Q4 → 2025-Q1) which is consistently
+  +1.5 to +4.0 while other windows are flat/negative. Single-window
+  dependency = selection bias risk.
+
+**Salvageable?** Only as a filtered MR overlay (regime-conditional sizing
+multiplier on top of a different base alpha), not as a standalone strategy.
+
+## Recommended next direction
+
+The same regime gate that fixes stitched also kills TiP and makes the
+strategy a sniper that's only effective in narrow windows. To make this
+actually profitable, the structural ceiling (PF < 1.0) has to break, which
+means either:
+
+1. **Different entry signal that doesn't share family with the gate.**
+   The current `z < -2 AND flat-4h AND vol > median` is three correlated
+   filters on the same "deep mean-reversion at high vol" pattern. Try
+   **Connors RSI(3)** with the SAME regime+vol filters — a different
+   signal architecture using the same favorable regime might lift PF
+   above 1.0 by detecting reversion turns earlier.
+2. **Funding-rate filter** as the gate, not 4h slope. Funding directly
+   measures market positioning skew; in flat-funding periods MR edge
+   should be cleaner (no carry headwind on either side). Requires loading
+   funding parquets that currently aren't in the harness path; check
+   `data/bybit/funding/` first.
+3. **Abandon symmetric L/S and go long-only with very tight gates.** Per
+   session 1 priors, long-only iter 10 had best stitched at the time.
+   Combined with the now-validated high-vol + tight-flat gates, this
+   might be the cleanest path to PF > 1.
+
+**Pick #1 first** (Connors RSI inside the validated gates) — it's the
+smallest risk and tests whether the regime gate is doing the work or
+the z-signal contributes anything.

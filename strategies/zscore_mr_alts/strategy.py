@@ -44,8 +44,8 @@ DEFAULT_PARAMS: dict = {
     "trend_ema": 50,                # 4h EMA span
     "trend_slope_window": 5,        # bars to measure slope (5 * 4h = 20h)
     "regime_lookback_days": 30,     # rolling window for slope quantile
-    "regime_quantile": 0.3,         # only trade when |slope| below this quantile
-    "vol_floor_q": 0.2,             # skip entries when ATR% in bottom 20% of 30d history
+    "regime_quantile": 0.15,        # 0.2 -> 0.15: continue concentrating in tightest flat regime
+    "vol_floor_q": 0.5,             # only trade when ATR% above 30d median — MR edge is in high-vol-flat buckets per regime decomp
     "atr_period": 14,
 }
 

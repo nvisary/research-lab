@@ -24,6 +24,10 @@ DEFAULT_PARAMS: dict = {
     "atr_period": 14,
     "atr_stop_k": 2.5,
     "max_hold_bars": 24,
+    "pierce_cooldown": 10,
+    "bb_period": 20,
+    "bb_lb": 180,
+    "bb_q_max": 0.25,
 }
 
 PARAM_SPACE: dict = {
@@ -34,6 +38,10 @@ PARAM_SPACE: dict = {
     "atr_period": (7, 28),
     "atr_stop_k": (1.5, 5.0),
     "max_hold_bars": (8, 60),
+    "pierce_cooldown": (3, 30),
+    "bb_period": (10, 60),
+    "bb_lb": (60, 360),
+    "bb_q_max": (0.20, 0.80),
 }
 
 
@@ -57,6 +65,10 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     atr_period = int(params.get("atr_period", 14))
     atr_stop_k = float(params.get("atr_stop_k", 2.5))
     max_hold = int(params.get("max_hold_bars", 24))
+    pierce_cooldown = int(params.get("pierce_cooldown", 10))
+    bb_period = int(params.get("bb_period", 20))
+    bb_lb = int(params.get("bb_lb", 180))
+    bb_q_max = float(params.get("bb_q_max", 0.50))
 
     upper = high.rolling(n).max()
     lower = low.rolling(n).min()
@@ -68,11 +80,31 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     slope_pct = (trend - trend.shift(slope_lb)) / trend
     chop = slope_pct.abs() < max_slope_pct
 
+    # BB width compression gate: only trade when bandwidth in lowest q of trailing window
+    bb_mid = close.rolling(bb_period).mean()
+    bb_std = close.rolling(bb_period).std()
+    bb_width = (bb_std * 2.0) / bb_mid.replace(0, np.nan)
+    bb_rank = bb_width.rolling(bb_lb, min_periods=bb_period).rank(pct=True)
+    bb_compressed = (bb_rank.shift(1) < bb_q_max).fillna(False)
+    chop = chop & bb_compressed
+
     atr = _atr(df, atr_period)
 
     # Fade: prior-bar pierce of donchian high → short; prior-bar pierce of low → long
     fade_short = (high.shift(1) >= upper.shift(2)) & (close < upper.shift(1))
     fade_long = (low.shift(1) <= lower.shift(2)) & (close > lower.shift(1))
+
+    # Pierce-cooldown filter: require that the pierce is the FIRST in K bars.
+    # If multiple pierces in a row, we're in a trend → don't fade.
+    pierced_up = (high >= upper.shift(1)).shift(1).fillna(False)
+    pierced_dn = (low <= lower.shift(1)).shift(1).fillna(False)
+    # count pierces in the window ending at t-2 (exclude the very recent pierce t-1)
+    recent_up = pierced_up.shift(1).rolling(pierce_cooldown, min_periods=1).sum().fillna(0)
+    recent_dn = pierced_dn.shift(1).rolling(pierce_cooldown, min_periods=1).sum().fillna(0)
+    first_pierce_up = recent_up == 0
+    first_pierce_dn = recent_dn == 0
+    fade_short = fade_short & first_pierce_up
+    fade_long = fade_long & first_pierce_dn
 
     fl = fade_long.values
     fs = fade_short.values

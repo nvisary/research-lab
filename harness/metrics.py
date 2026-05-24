@@ -594,7 +594,8 @@ def summary(equity: pd.Series, returns: pd.Series, positions: pd.DataFrame,
 def composite_score(metrics: dict, dd_penalty: float = 0.5,
                     min_trades: int = 50, low_trades_penalty: float = 0.5,
                     min_time_in_position: float = 20.0,
-                    time_in_position_penalty: float = 1.0) -> float:
+                    time_in_position_penalty: float = 1.0,
+                    stitched_weight: float = 1.0) -> float:
     """OOS_Sharpe − λ·MaxDD with low-activity and low-time-in-position penalties.
 
     Below ``min_trades`` we apply a graded penalty
@@ -638,14 +639,23 @@ def composite_score(metrics: dict, dd_penalty: float = 0.5,
     if tip is not None and tip < min_time_in_position:
         tip_deficit = 1.0 - max(float(tip), 0.0) / float(min_time_in_position)
         score -= time_in_position_penalty * tip_deficit
-    # Stitched-floor (single-window analogue): composite must agree in
-    # sign and rough magnitude with the OOS total return.
-    #   - lost money → composite cannot be better than the return
-    #   - made money → composite cannot be worse than the return
-    # See aggregate_wf_composite for the WF version.
+    # Stitched-P&L influence (single-window analogue). Two-part rule so
+    # composite cannot lie about real account outcome:
+    #   1. Linear additive pull: score += stitched_weight * total_return.
+    #      A -30% OOS return drags composite down by 0.30 on top of any
+    #      Sharpe/DD-based score; a +30% lifts it by 0.30. This is the
+    #      "magnitude matters" piece — the old code only clamped, never
+    #      moved the score when it was already inside the bracket.
+    #   2. Hard sign-agreement floor/ceiling:
+    #        - total_return < 0  → composite ≤ total_return  (a losing
+    #          strategy cannot show a positive composite, ever)
+    #        - total_return > 0  → composite ≥ total_return  (a winning
+    #          strategy is not downgraded below its real PnL)
+    # See aggregate_wf_composite for the multi-window (24mo stitched) version.
     total_return = metrics.get("total_return")
     if total_return is not None:
         tr = float(total_return)
+        score = score + stitched_weight * tr
         if tr < 0.0 and score > tr:
             score = tr
         elif tr > 0.0 and score < tr:
@@ -659,11 +669,14 @@ def aggregate_wf_composite(window_metrics: list[dict],
                            low_trades_penalty: float = 0.5,
                            stability_penalty: float = 0.5,
                            min_time_in_position: float = 20.0,
-                           time_in_position_penalty: float = 1.0) -> tuple[float, dict]:
+                           time_in_position_penalty: float = 1.0,
+                           stitched_weight: float = 1.0) -> tuple[float, dict]:
     """Aggregate a list of per-window OOS metric dicts into a single composite.
 
     score = mean(window_composites) − stability_penalty · std(window_composites)
-           clamped above by stitched_oos_return when the latter is negative.
+           + stitched_weight · stitched_oos_return
+           clamped above by stitched_oos_return when the latter is negative,
+           clamped below by stitched_oos_return when it is positive.
 
     The standard-deviation term rewards strategies whose OOS Sharpe is consistent
     across windows over those whose mean Sharpe is the same but driven by one
@@ -696,7 +709,8 @@ def aggregate_wf_composite(window_metrics: list[dict],
     import numpy as np
 
     composites = [composite_score(m, dd_penalty, min_trades, low_trades_penalty,
-                                   min_time_in_position, time_in_position_penalty)
+                                   min_time_in_position, time_in_position_penalty,
+                                   stitched_weight)
                   for m in window_metrics]
     if not composites or any(c == float("-inf") for c in composites):
         return float("-inf"), {
@@ -727,7 +741,20 @@ def aggregate_wf_composite(window_metrics: list[dict],
     # a strategy that lost 30% over the stitched OOS cannot score
     # higher than -0.30, regardless of how lucky individual windows
     # looked. A strategy that earned positive PnL is not affected.
-    total_returns_for_stitch = [m.get("total_return", 0.0) for m in window_metrics]
+    # The "24mo stitched" P&L the dashboard surfaces is the compounded
+    # product of per-window equity end/start ratios over the FULL
+    # [train_start, oos_end) span of each window — not the OOS-only
+    # slice. We mirror that here so the composite floor aligns with
+    # what the operator sees in TrustVerdictBanner. Each window
+    # contributes ``total_return_full`` when present (set in
+    # backtest.run_split); we fall back to ``total_return`` (OOS-only)
+    # for older payloads or single-window paths.
+    total_returns_for_stitch = []
+    for m in window_metrics:
+        v = m.get("total_return_full")
+        if v is None:
+            v = m.get("total_return", 0.0)
+        total_returns_for_stitch.append(v)
     stitched_oos_compounded = 1.0
     for r in total_returns_for_stitch:
         try:
@@ -735,14 +762,20 @@ def aggregate_wf_composite(window_metrics: list[dict],
         except Exception:
             pass
     stitched_oos_return = stitched_oos_compounded - 1.0
-    # Symmetric clamp: composite must agree in sign and rough magnitude with
-    # the real OOS equity curve.
-    #   - composite ≤ stitched_oos_return when stitched < 0 (can't claim
-    #     "good Sharpe" while losing money)
-    #   - composite ≥ stitched_oos_return when stitched > 0 (can't claim
-    #     "mediocre" while actually earning meaningful PnL — a strategy
-    #     that returned +30% deserves at least +0.30 even if Sharpe was
-    #     dragged by stability penalty)
+    # Additive pull (magnitude matters): the 24mo stitched return moves
+    # the composite proportionally, not just as a one-sided clamp. A
+    # strategy with -30% stitched OOS gets -0.30 deducted from its
+    # composite directly, on top of any per-window penalties; a +30%
+    # earns +0.30 of additive lift.
+    score = score + stitched_weight * stitched_oos_return
+    # Hard sign-agreement rule: stitched OOS return dictates the sign
+    # and magnitude bracket of the composite.
+    #   - stitched < 0  → composite ≤ stitched_oos_return  (a strategy
+    #     that lost money over the full stitched OOS CANNOT show a
+    #     positive composite, no matter how clean per-window Sharpe was)
+    #   - stitched > 0  → composite ≥ stitched_oos_return  (a strategy
+    #     that earned meaningful PnL is not downgraded below its real
+    #     return by Sharpe-density penalties)
     if stitched_oos_return < 0.0 and score > stitched_oos_return:
         score = stitched_oos_return
     elif stitched_oos_return > 0.0 and score < stitched_oos_return:

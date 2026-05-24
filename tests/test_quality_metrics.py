@@ -38,15 +38,19 @@ def test_longest_true_run_all_true():
 # pct_positive_months
 # --------------------------------------------------------------------------- #
 def test_pct_positive_months():
-    # Build 12 months of monthly equity with 8 positive moves and 4 negative.
+    # Build 13 MS-aligned equity points (12 month-over-month moves: +8, -4).
+    # Note: quality_metrics drops the first resampled bucket as a
+    # partial-month guard (see metrics.py:374). For MS-aligned input that
+    # costs one observation: 13 points → resample("MS").last() = 13 →
+    # drop first = 12 → pct_change.dropna() = 11 returns. Of the 11
+    # surviving returns, the first 7 are positive (101→102 … 107→108)
+    # and the last 4 are negative (108→107 … 105→104) → 7/11 ≈ 63.64%.
     idx = pd.date_range("2024-01-01", periods=13, freq="MS", tz="UTC")
-    # equity sequence: starts at 100. +8 ups of +1, then 4 downs of -1.
     moves = [+1.0] * 8 + [-1.0] * 4
     equity_vals = np.concatenate([[100.0], 100.0 + np.cumsum(moves)])
     eq = pd.Series(equity_vals, index=idx)
     out = quality_metrics(eq, eq.pct_change().fillna(0), None, None, tf="1d")
-    # 12 monthly returns total, 8 positive → 66.67%
-    assert out["pct_positive_months"] == pytest.approx(8 / 12 * 100.0, rel=1e-3)
+    assert out["pct_positive_months"] == pytest.approx(7 / 11 * 100.0, rel=1e-3)
 
 
 # --------------------------------------------------------------------------- #

@@ -606,6 +606,25 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
                                 trades_in_slice=slice_trades,
                                 seed_hint=seed_hint)
 
+    # Full-period (train_start → oos_end) total return for the OOS dict.
+    # The OOS-only `total_return` field captures the "did the OOS slice
+    # make money" view; this complementary scalar captures the
+    # "if you ran the strategy continuously from window start to OOS end,
+    # what does the account look like" view — i.e. the same number the
+    # dashboard's per-window equity ratio shows. It is the input the
+    # composite's stitched-floor uses to enforce that a strategy whose
+    # full-period equity drew down cannot post a positive composite.
+    try:
+        eq_full_mask = ((adj_equity_full.index >= split.train_start) &
+                        (adj_equity_full.index < split.oos_end))
+        eq_full = adj_equity_full[eq_full_mask]
+        if len(eq_full) >= 2 and float(eq_full.iloc[0]) > 0:
+            out["oos"]["total_return_full"] = float(eq_full.iloc[-1] / eq_full.iloc[0] - 1.0)
+        else:
+            out["oos"]["total_return_full"] = None
+    except Exception:
+        out["oos"]["total_return_full"] = None
+
     # Derived: train→OOS Sharpe gap. Overfitting indicator: > 1.0 is
     # a strong signal that the strategy fit the training period rather
     # than generalised. Stored on the OOS dict because that's where

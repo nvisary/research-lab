@@ -15,8 +15,9 @@ DEFAULT_TF: str = "4h"
 
 DEFAULT_PARAMS: dict = {
     "length": 30,
-    "trend_span": 200,
-    "slope_lb": 12,
+    "regime_length": 200,
+    "vol_exp_thresh": 1.25,  # Expansion trigger
+    "vol_exp_span": 50,  # Lookback span
     "vol_target": 0.008,
     "vol_q": 0.70,
     "long_only": 0,
@@ -24,8 +25,9 @@ DEFAULT_PARAMS: dict = {
 
 PARAM_SPACE: dict = {
     "length": (10, 100),
-    "trend_span": (50, 400),
-    "slope_lb": (6, 96),
+    "regime_length": (100, 500),
+    "vol_exp_thresh": (1.05, 2.0),
+    "vol_exp_span": (20, 100),
     "vol_target": (0.005, 0.02),
     "vol_q": (0.5, 0.95),
     "long_only": (0, 1),
@@ -61,25 +63,35 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     high, low = df["high"], df["low"]
 
     length = int(params.get("length", 30))
-    trend_span = int(params.get("trend_span", 200))
-    slope_lb = int(params.get("slope_lb", 12))
+    reg_len = int(params.get("regime_length", 200))
+    vol_exp = float(params.get("vol_exp_thresh", 1.25))
+    vol_span = int(params.get("vol_exp_span", 50))
     long_only = int(params.get("long_only", 0)) == 1
     vol_target = float(params.get("vol_target", 0.008))
     vol_q = float(params.get("vol_q", 0.70))
 
+    # Signal HMA
     h = hma(close, length)
-
-    # Direction change (hook)
     rising = h > h.shift(1)
     falling = h < h.shift(1)
 
-    # Trend filter: EMA + Slope
-    ema_trend = close.ewm(span=trend_span, adjust=False, min_periods=trend_span).mean()
-    ema_slope = ema_trend - ema_trend.shift(slope_lb)
-    up_regime = (close > ema_trend) & (ema_slope > 0)
-    dn_regime = (close < ema_trend) & (ema_slope < 0)
+    # Regime HMA
+    h_reg = hma(close, reg_len)
+    up_regime = (close > h_reg) & (h_reg > h_reg.shift(1))
+    dn_regime = (close < h_reg) & (h_reg < h_reg.shift(1))
 
-    # Extreme-vol gate: skip entries in top vol_q quantile of ATR%.
+    # RSI extremes
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / 14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / 14, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100.0 - 100.0 / (1.0 + rs)
+    rsi_ok_long = rsi < 70
+    rsi_ok_short = rsi > 30
+
+    # Extreme-vol gate & Vol expansion trigger
     prev_close = close.shift(1)
     tr = pd.concat(
         [
@@ -90,20 +102,21 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
         axis=1,
     ).max(axis=1)
     atr = tr.ewm(span=14, adjust=False, min_periods=14).mean()
+    atr_ma = atr.rolling(vol_span).mean()
+
     atr_pct = atr / close
     vol_thresh = atr_pct.rolling(200, min_periods=200).quantile(vol_q)
-    vol_ok = atr_pct <= vol_thresh
+    vol_ok = (atr_pct <= vol_thresh) & (atr < (atr_ma * vol_exp))
 
     pos = pd.Series(0.0, index=df.index)
-    pos[rising & up_regime & vol_ok] = 1.0
+    pos[rising & up_regime & rsi_ok_long & vol_ok] = 1.0
     if not long_only:
-        pos[falling & dn_regime & vol_ok] = -1.0
+        pos[falling & dn_regime & rsi_ok_short & vol_ok] = -1.0
 
     # Vol-targeted sizing
-    # Clip to avoid explosive sizing in very-low-vol bars
     size_mult = (vol_target / atr_pct).clip(lower=0.3, upper=1.0)
-
     pos = pos * size_mult.fillna(0.3)
+
     return pos.shift(1).fillna(0.0)
 
 

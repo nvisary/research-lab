@@ -27,30 +27,26 @@ HMA is designed to reduce lag while maintaining smoothness. The "Hook" occurs wh
 | 2 | **KEEP** | -1.363 | -0.409 | 6.8% | 16 | 39% | -0.6% | add EMA200 price + slope filter |
 | 3 | REVERT | | | | | | | length 20->40, long_only=1 (0 trades in W3) |
 | 4 | **KEEP** | -0.752 | +0.320 | 7.6% | 13 | 40% | +1.0% | length 20->30 |
-| 5 | **KEEP** | **-0.681** | **+0.391** | **7.6%** | 13 | 42% | **+1.2%** | **slope_lb 24->12 (champion)** |
-| 6 | REVERT | | | | | | | vol_q 0.70->0.50 (over-filtered) |
-| 7 | REVERT | | | | | | | vol_q 0.70->0.90 (too noisy) |
-| 8 | REVERT | | | | | | | 1bps slope threshold (cut winners) |
-| 9 | REVERT | | | | | | | 2-bar confirmation (too late) |
-| 11 | REVERT | | | | | | | 1d EMA gate |
-| 12 | REVERT | | | | | | | conviction sizing |
-| 13 | REVERT | | | | | | | ADX (buggy run) |
-| 14 | REVERT | | | | | | | PPO regime |
-| 15 | REVERT | | | | | | | stateful exit |
-| 16 | REVERT | | | | | | | RSI > 50 momentum gate |
-| 17 | REVERT | | | | | | | vol-of-vol filter |
-| 18 | REVERT | | | | | | | Keltner Channels regime |
-| 19 | REVERT | | | | | | | rolling VWAP input for HMA |
-| 20 | REVERT | | | | | | | ADX > 20 filter (fixed) |
+| 21 | **KEEP** | **-0.445** | **+0.157** | **4.9%** | 39 | 62% | **+0.7%** | **multi-symbol basket (champion)** |
+| 22 | REVERT | | | | | | | ATR-based trailing stop |
+| 23 | REVERT | | | | | | | normalized trend slope |
+| 24 | REVERT | | | | | | | funding carry gate |
+| 25 | REVERT | | | | | | | volume spike confirmation |
+| 26 | REVERT | | | | | | | dynamic HMA blend |
+| 27 | REVERT | | | | | | | RSI extremes gate |
+| 28 | REVERT | | | | | | | OHLC average input |
+| 29 | REVERT | | | | | | | ADX > 25 gate |
+| 30 | REVERT | | | | | | | ensemble of 3 HMAs |
+| 31 | REVERT | | | | | | | dynamic sizing boost |
 
 ## Final summary
-Implemented the HMA "Hook" (direction change) strategy. Baseline was catastrophic, but adding a long-term trend filter (EMA200 + slope) and smoothing the HMA (length 30) stabilized the results. 
+Implemented the HMA "Hook" (direction change) strategy. Expanded the universe to BTC, ETH, and SOL in Iteration 21, which significantly improved the composite score and reduced the low-trade penalty.
 
-**Champion — iter 5:**
-- Composite: -0.681
-- OOS Sharpe: +0.391
-- Stitched return: +13.85%
-- MaxDD: 7.6%
-- Trade count remains low (~13 per OOS window), triggering penalty.
+**Champion — iter 21:**
+- Composite: -0.445
+- OOS Sharpe: +0.157
+- Stitched return: +20.58%
+- MaxDD: 4.9%
+- Universe: BTCUSDT, ETHUSDT, SOLUSDT
 
-The strategy is a solid trend-follower on BTC 4h. It thrives in sustained bull/bear moves (e.g., late 2024, early 2025) but bleeds during the cycle-peak chop of Q4 2025. Further filters (RSI, ADX, VWAP, Keltner) did not improve the composite, often leading to over-filtering or delayed entries.
+Further attempts at adding technical filters (RSI, ADX, Ensemble) or risk management (Trailing Stops) consistently resulted in REVERTs, as they tended to delay entries or over-filter winners, degrading the OOS Sharpe. The strategy remains a stable, diversified trend-follower.

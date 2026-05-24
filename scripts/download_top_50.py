@@ -31,13 +31,21 @@ def get_top_50():
 
 def main():
     symbols = get_top_50()
-    print(f"Top 50 symbols: {symbols}")
+    log_file = "download_progress.log"
+
+    # Initialize log file
+    with open(log_file, "a") as f:
+        f.write(f"\n--- Starting new download session at {datetime.now()} ---\n")
+        f.write(f"Top 50 symbols: {symbols}\n")
 
     start = "2024-01"
     end = "2026-05"
 
     for i, sym in enumerate(symbols):
-        print(f"[{i + 1}/50] Processing {sym}...")
+        status = f"[{i + 1}/50] Processing {sym}..."
+        print(status)
+        with open(log_file, "a") as f:
+            f.write(status + "\n")
 
         # Download OHLCV with retries
         for attempt in range(3):
@@ -61,9 +69,11 @@ def main():
                 )
                 break
             except subprocess.CalledProcessError as e:
-                print(f"  OHLCV download failed for {sym}: {e}")
+                err = f"  OHLCV download failed for {sym}: {e}"
+                print(err)
+                with open(log_file, "a") as f:
+                    f.write(err + "\n")
                 if attempt < 2:
-                    print("  Waiting 30s before retry...")
                     time.sleep(30)
                 else:
                     print(f"  Skipping OHLCV for {sym} after 3 attempts.")
@@ -90,9 +100,11 @@ def main():
                 )
                 break
             except subprocess.CalledProcessError as e:
-                print(f"  Funding download failed for {sym}: {e}")
+                err = f"  Funding download failed for {sym}: {e}"
+                print(err)
+                with open(log_file, "a") as f:
+                    f.write(err + "\n")
                 if attempt < 2:
-                    print("  Waiting 15s before retry...")
                     time.sleep(15)
                 else:
                     print(f"  Skipping Funding for {sym} after 3 attempts.")

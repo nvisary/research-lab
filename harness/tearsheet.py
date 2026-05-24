@@ -133,8 +133,97 @@ def _worst_drawdowns(eq: pd.Series, n: int = 5) -> list[dict]:
     return out[:n]
 
 
+def _format_legs_inline(legs_json: str | None, max_legs: int = 4) -> str:
+    """Compact one-line representation of basket legs for the HTML table.
+
+    Truncates to top-`max_legs` by |weight| and shows ", …" if more exist.
+    """
+    if not legs_json:
+        return ""
+    try:
+        legs = json.loads(legs_json)
+    except Exception:
+        return str(legs_json)[:80]
+    items = sorted(legs.items(), key=lambda kv: -abs(float(kv[1])))
+    head = items[:max_legs]
+    rest = len(items) - len(head)
+    pieces = [f'<span style="white-space:nowrap">{k}:{float(v):+.3f}</span>' for k, v in head]
+    if rest > 0:
+        pieces.append(f'<span style="color:#888">+{rest} more</span>')
+    return ", ".join(pieces)
+
+
+def _basket_section_html(events_df: pd.DataFrame | None) -> str:
+    """HTML section listing every basket lifecycle event. Returns empty
+    string if no events to render."""
+    if events_df is None or events_df.empty:
+        return ""
+    df = events_df.copy()
+    # Stable column order; missing columns rendered as empty.
+    show_cols = [
+        "window", "basket_id", "opened_at", "closed_at", "close_reason",
+        "realized_lifespan_bars", "target_symbol", "adf_pvalue", "half_life",
+        "n_legs", "legs_json",
+    ]
+    for c in show_cols:
+        if c not in df.columns:
+            df[c] = None
+    df = df[show_cols]
+    # Summary above the table.
+    n = len(df)
+    by_reason = df["close_reason"].fillna("active").value_counts().to_dict()
+    reason_summary = ", ".join(f"{k}={v}" for k, v in by_reason.items())
+    median_life = (df["realized_lifespan_bars"].astype("float64").dropna().median()
+                   if df["realized_lifespan_bars"].notna().any() else None)
+    median_life_s = f"{median_life:.0f}" if median_life is not None else "—"
+
+    rows_html = []
+    for _, r in df.iterrows():
+        legs_str = _format_legs_inline(r.get("legs_json"))
+        opened = "" if pd.isna(r.get("opened_at")) else pd.Timestamp(r["opened_at"]).strftime("%Y-%m-%d %H:%M")
+        closed = "" if pd.isna(r.get("closed_at")) else pd.Timestamp(r["closed_at"]).strftime("%Y-%m-%d %H:%M")
+        adf = ("" if pd.isna(r.get("adf_pvalue")) else f"{float(r['adf_pvalue']):.3f}")
+        hl = ("" if pd.isna(r.get("half_life")) else f"{float(r['half_life']):.1f}")
+        life = ("" if pd.isna(r.get("realized_lifespan_bars"))
+                else f"{float(r['realized_lifespan_bars']):.0f}")
+        target = "" if pd.isna(r.get("target_symbol")) else str(r["target_symbol"])
+        reason = "" if pd.isna(r.get("close_reason")) else str(r["close_reason"])
+        rows_html.append(
+            f"<tr>"
+            f"<td>{int(r['window']) if pd.notna(r.get('window')) else ''}</td>"
+            f"<td style='font-family:monospace;font-size:11px'>{r.get('basket_id', '')}</td>"
+            f"<td>{opened}</td><td>{closed}</td><td>{reason}</td>"
+            f"<td style='text-align:right'>{life}</td>"
+            f"<td>{target}</td>"
+            f"<td style='text-align:right'>{adf}</td>"
+            f"<td style='text-align:right'>{hl}</td>"
+            f"<td style='text-align:right'>{int(r['n_legs']) if pd.notna(r.get('n_legs')) else ''}</td>"
+            f"<td>{legs_str}</td>"
+            f"</tr>"
+        )
+    table = (
+        "<table class='kv' style='font-size:12px'>"
+        "<thead><tr>"
+        "<th>win</th><th>basket_id</th><th>opened</th><th>closed</th>"
+        "<th>reason</th><th>life (bars)</th><th>target</th>"
+        "<th>ADF p</th><th>half-life</th><th>n_legs</th><th>legs</th>"
+        "</tr></thead><tbody>"
+        + "".join(rows_html)
+        + "</tbody></table>"
+    )
+    return (
+        "<section><h2>Basket lifecycle (stat-arb)</h2>"
+        f"<p style='color:#666;margin:0 0 8px 0'>"
+        f"{n} events &middot; close reasons: {reason_summary} &middot; "
+        f"median realized lifespan: {median_life_s} bars</p>"
+        + table
+        + "</section>"
+    )
+
+
 def build(iter_data: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame | None,
-          history: list[dict]) -> str:
+          history: list[dict],
+          basket_events_df: pd.DataFrame | None = None) -> str:
     """Render an HTML tear sheet for one iteration.
 
     iter_data keys expected: iter, verdict (optional), composite, dsr, params,
@@ -143,6 +232,8 @@ def build(iter_data: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame | No
                raw_equity?, funding_cashflow?].
     trades_df: standardized trade ledger or None.
     history: list of past iteration rows for context.
+    basket_events_df: stat-arb only — basket lifecycle log. Renders a
+        per-basket table section when present.
     """
     iter_id = iter_data.get("iter", "?")
     composite = iter_data.get("composite")
@@ -299,6 +390,9 @@ def build(iter_data: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame | No
     else:
         worst_html = '<em class="dim">no drawdowns</em>'
 
+    # ----- Basket lifecycle (stat-arb only; empty for directional) -----
+    basket_section = _basket_section_html(basket_events_df)
+
     # ----- Trade analysis -----
     if trades_df is not None and not trades_df.empty and "return_pct" in trades_df.columns:
         wins = trades_df[trades_df["pnl_quote"] > 0]
@@ -446,6 +540,8 @@ th, td {{ padding: 6px 10px; text-align: left; border-bottom: 1px solid #334155;
 
 <section><h2>Worst drawdown periods</h2>{worst_html}</section>
 
+{basket_section}
+
 <section><h2>Environment</h2>
 {_kv_table([
     ("generated_at", iter_data.get("env", {}).get("generated_at", datetime.now(timezone.utc).isoformat())),
@@ -463,8 +559,12 @@ th, td {{ padding: 6px 10px; text-align: left; border-bottom: 1px solid #334155;
 
 def render_to_file(iter_data: dict, equity_df: pd.DataFrame,
                    trades_df: pd.DataFrame | None, history: list[dict],
-                   out_path: Path) -> Path:
+                   out_path: Path,
+                   basket_events_df: pd.DataFrame | None = None) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(build(iter_data, equity_df, trades_df, history),
-                        encoding="utf-8")
+    out_path.write_text(
+        build(iter_data, equity_df, trades_df, history,
+              basket_events_df=basket_events_df),
+        encoding="utf-8",
+    )
     return out_path

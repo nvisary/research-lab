@@ -13,5 +13,8 @@ frontend/dist/
 strategies/**/runs/**
 !strategies/**/runs/.gitkeep
 strategies/**/sweeps/**
+strategies_statarb/**/runs/**
+!strategies_statarb/**/runs/.gitkeep
+strategies_statarb/**/sweeps/**
 # Top-level cross-strategy artefacts (multistrat reports etc.)
 /runs/

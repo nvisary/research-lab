@@ -28,7 +28,26 @@ from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[1]
 STRATS = ROOT / "strategies"
+STRATS_STATARB = ROOT / "strategies_statarb"
+# Search roots for strategy discovery (first match wins on duplicate names).
+# Order matters for `_strategy_dir`: directional first so legacy URLs stay stable.
+STRATS_ROOTS: list[Path] = [STRATS, STRATS_STATARB]
 DIST = ROOT / "frontend" / "dist"
+
+
+def _strategy_mode_for(root: Path) -> str:
+    """Tag a strategy by which discovery root it came from."""
+    return "statarb" if root == STRATS_STATARB else "directional"
+
+
+def _iter_strategy_dirs():
+    """Yield (path, mode) for every strategy across all discovery roots."""
+    for root in STRATS_ROOTS:
+        if not root.exists():
+            continue
+        for p in sorted(root.iterdir()):
+            if p.is_dir() and (p / "strategy.py").exists():
+                yield p, _strategy_mode_for(root)
 
 
 def _extract_description(strategy_py: Path) -> str | None:
@@ -136,10 +155,20 @@ def _start_job(cmd: list[str]) -> Job:
 # Helpers
 # --------------------------------------------------------------------------- #
 def _strategy_dir(name: str) -> Path:
-    p = STRATS / name
-    if not p.exists() or not (p / "strategy.py").exists():
-        raise HTTPException(404, f"strategy '{name}' not found")
-    return p
+    for root in STRATS_ROOTS:
+        p = root / name
+        if p.exists() and (p / "strategy.py").exists():
+            return p
+    raise HTTPException(404, f"strategy '{name}' not found")
+
+
+def _strategy_mode(name: str) -> str:
+    """Return 'statarb' if a strategy lives under strategies_statarb/, else 'directional'."""
+    for root in STRATS_ROOTS:
+        p = root / name
+        if p.exists() and (p / "strategy.py").exists():
+            return _strategy_mode_for(root)
+    return "directional"
 
 
 def _load_history(strategy: str) -> list[dict]:
@@ -423,12 +452,8 @@ def _sanitize(o: Any) -> Any:
 # --------------------------------------------------------------------------- #
 @app.get("/api/strategies")
 def api_strategies():
-    if not STRATS.exists():
-        return []
     out = []
-    for p in sorted(STRATS.iterdir()):
-        if not p.is_dir() or not (p / "strategy.py").exists():
-            continue
+    for p, mode in _iter_strategy_dirs():
         best = None
         bp = p / "runs" / "best.json"
         if bp.exists():
@@ -446,6 +471,7 @@ def api_strategies():
             "best_composite": (best or {}).get("composite"),
             "best_iter": (best or {}).get("iter"),
             "n_iters": n_iters,
+            "mode": mode,
         })
     return _sanitize(out)
 
@@ -466,6 +492,7 @@ def api_strategy(name: str):
         "program_md": program,
         "strategy_py": code,
         "trust_verdict": trust,
+        "mode": _strategy_mode(name),
     })
 
 
@@ -626,23 +653,93 @@ class IterateRequest(BaseModel):
 
 @app.post("/api/strategies/{name}/iterate")
 def api_iterate(name: str, body: IterateRequest):
-    _strategy_dir(name)
-    cmd = [
-        sys.executable, "-m", "runner.iterate",
-        f"strategies/{name}",
-        "--start", body.start,
-        "--end", body.end,
-        "--walk", str(body.walk),
-        "--note", body.note,
-    ]
-    # Only forward --tf when explicitly provided. Otherwise iterate.py reads
-    # DEFAULT_TF from strategy.py.
-    if body.tf:
-        cmd.extend(["--tf", body.tf])
-    if body.expanding_wf:
-        cmd.append("--expanding-wf")
+    d = _strategy_dir(name)
+    mode = _strategy_mode(name)
+    if mode == "statarb":
+        # Stat-arb strategies use the parallel runner with the two-stage
+        # contract. --expanding-wf isn't supported there yet (single
+        # walk-forward shape).
+        cmd = [
+            sys.executable, "-m", "runner_statarb.iterate",
+            str(d),
+            "--start", body.start,
+            "--end", body.end,
+            "--walk", str(body.walk),
+            "--note", body.note,
+        ]
+        if body.tf:
+            cmd.extend(["--tf", body.tf])
+    else:
+        cmd = [
+            sys.executable, "-m", "runner.iterate",
+            f"strategies/{name}",
+            "--start", body.start,
+            "--end", body.end,
+            "--walk", str(body.walk),
+            "--note", body.note,
+        ]
+        # Only forward --tf when explicitly provided. Otherwise iterate.py reads
+        # DEFAULT_TF from strategy.py.
+        if body.tf:
+            cmd.extend(["--tf", body.tf])
+        if body.expanding_wf:
+            cmd.append("--expanding-wf")
     job = _start_job(cmd)
     return job.to_json()
+
+
+@app.get("/api/strategies/{name}/baskets/{iter_id}")
+def api_baskets(name: str, iter_id: int):
+    """Per-iteration basket lifecycle log for stat-arb strategies.
+
+    Returns one record per basket open→close transition with:
+      window, basket_id, opened_at, closed_at, close_reason,
+      planned_lifespan_bars, realized_lifespan_bars, target_symbol,
+      adf_pvalue, half_life, beta, n_legs, legs (parsed dict).
+
+    404 when the parquet doesn't exist (directional strategy or stat-arb
+    iter that produced no baskets).
+    """
+    d = _strategy_dir(name)
+    p = d / "runs" / "baskets" / f"iter_{iter_id:04d}.parquet"
+    if not p.exists():
+        raise HTTPException(404, f"no basket log for iter {iter_id}")
+    df = pd.read_parquet(p)
+    # Parse legs_json into a dict on the wire so the frontend doesn't need
+    # to double-parse. Stable column order for the UI.
+    records = []
+    for _, row in df.iterrows():
+        legs_raw = row.get("legs_json")
+        try:
+            legs = json.loads(legs_raw) if legs_raw else {}
+        except Exception:
+            legs = {}
+        rec = {
+            "window": int(row["window"]) if "window" in row else 0,
+            "basket_id": row.get("basket_id"),
+            "opened_at": row.get("opened_at"),
+            "closed_at": row.get("closed_at"),
+            "close_reason": row.get("close_reason"),
+            "planned_lifespan_bars": (int(row["planned_lifespan_bars"])
+                                       if pd.notna(row.get("planned_lifespan_bars"))
+                                       else None),
+            "realized_lifespan_bars": (float(row["realized_lifespan_bars"])
+                                        if pd.notna(row.get("realized_lifespan_bars"))
+                                        else None),
+            "target_symbol": (row["target_symbol"]
+                              if "target_symbol" in row
+                              and pd.notna(row.get("target_symbol"))
+                              else None),
+            "adf_pvalue": (float(row["adf_pvalue"])
+                           if pd.notna(row.get("adf_pvalue")) else None),
+            "half_life": (float(row["half_life"])
+                          if pd.notna(row.get("half_life")) else None),
+            "beta": (float(row["beta"]) if pd.notna(row.get("beta")) else None),
+            "n_legs": (int(row["n_legs"]) if pd.notna(row.get("n_legs")) else 0),
+            "legs": legs,
+        }
+        records.append(rec)
+    return _sanitize({"iter": iter_id, "n_events": len(records), "events": records})
 
 
 @app.get("/api/strategies/{name}/tearsheet/{iter_id}")
@@ -872,7 +969,7 @@ def api_portfolio_run(body: PortfolioRequest):
         for c in body.components
     ]
     for c in components:
-        if not (STRATS / c.strategy).exists():
+        if not any((root / c.strategy).exists() for root in STRATS_ROOTS):
             raise HTTPException(404, f"unknown strategy: {c.strategy}")
         if c.capital <= 0:
             raise HTTPException(400, f"capital must be > 0 (got {c.capital} for {c.strategy})")

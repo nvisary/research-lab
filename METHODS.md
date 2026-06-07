@@ -217,6 +217,40 @@ Crucially: the choice is made entirely without seeing OOS.
 ### 6.3 Combinatorial purged k-fold (CPCV)
 López de Prado's method to handle overlapping labels in time series. Overkill for most starting strategies, essential when you build complex labeling (e.g. triple-barrier) or many features.
 
+### 6.4 `runner.optimize` — a *universe* of robust parameter plateaus
+When you want to know which `PARAM_SPACE` regions are robust *before* spending
+iterations one-at-a-time, run the optimizer:
+
+```bash
+uv run python -m runner.optimize strategies/<name> --params cci_period cci_threshold
+```
+
+What it does, and why it's safe:
+
+- Searches the declared `PARAM_SPACE` (grid for ≤2 params, Sobol quasi-random
+  for 3+), evaluating each candidate over **inner walk-forward folds run
+  strictly inside the train slice** `[period_start, train_cutoff)`. It **never
+  touches the reserved OOS tail** that `runner.iterate` uses for keep/revert,
+  and the holdout is hard-capped out. This is the "tune within the train slice,
+  choose without seeing OOS" rule of §6.2, enforced mechanically.
+- Scores each candidate `mean(fold_sharpe) − 0.5·std(fold_sharpe)` with the
+  same graded low-trades and low-time-in-position penalties as
+  `composite_score` (so a sparse-but-real strategy is penalized, not nuked).
+- Returns a **universe of plateaus** — connected high-score regions — not a
+  single peak. A wide plateau (`n_configs` large, `span` wide) is robust; a
+  `n_configs=1` spike is almost always overfit. **Pick the center of the widest
+  high-score plateau**, not the single best score.
+
+It is **read-only** to the iter loop: writes only to
+`strategies/<name>/optimize/<id>/` (`universe.json`, `candidates.parquet`),
+never to `best.json` / `history.jsonl` / `strategy.py` / `program.md`.
+
+Workflow: `optimize` → read `universe.json` → set the chosen plateau center in
+`DEFAULT_PARAMS` → run `runner.iterate` as usual. The OOS that judges the result
+was never seen by the optimizer, so the keep/revert verdict stays honest.
+This replaces the anti-pattern of hand-trying `cci_period=15`, `16`, `17`, …
+one iteration at a time (AGENTS.md §6.1 calls those bad hypotheses).
+
 ---
 
 ## 7. Statistical hygiene — what to compute, not just optimize

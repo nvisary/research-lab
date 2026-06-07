@@ -362,6 +362,12 @@ uv run python -m harness.backtest strategies/<name> --period 2024-01-01:2026-01-
 # one iteration with keep/revert + history append (default period = train+val)
 uv run python -m runner.iterate strategies/<name> --note "one-sentence hypothesis"
 
+# TRAIN-ONLY parameter optimizer → universe of robust plateaus (see METHODS.md §6.4)
+# Searches PARAM_SPACE strictly inside the train slice; never touches OOS/holdout.
+# Read-only: writes to strategies/<name>/optimize/<id>/, not best.json/history.
+# Pick the widest high-score plateau's center, set it in DEFAULT_PARAMS, then iterate.
+uv run python -m runner.optimize strategies/<name> --params cci_period cci_threshold
+
 # holdout sanity check on 2026-Q1 + Apr — read-only, does not touch best.json
 uv run python -m runner.holdout strategies/<name>
 

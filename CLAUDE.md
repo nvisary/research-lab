@@ -71,6 +71,11 @@ When the user says "iterate on `<strategy_name>`" or similar:
 # one iteration with audit + WF=4 + funding-adjusted equity
 uv run python -m runner.iterate strategies/<name> --note "<hypothesis>"
 
+# train-only parameter optimizer → universe of robust plateaus (METHODS.md §6.4)
+# never sees OOS/holdout; read-only to the iter loop. pick a plateau center,
+# set it in DEFAULT_PARAMS, then run runner.iterate to let OOS judge it.
+uv run python -m runner.optimize strategies/<name> --params <p1> <p2>
+
 # manual holdout (USER triggers this, not the agent during iteration)
 uv run python -m runner.holdout strategies/<name>
 

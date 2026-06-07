@@ -10,9 +10,15 @@ frontend/node_modules/
 frontend/dist/
 .claude/settings.local.json
 .claude/worktrees/
+.omc/
 /*.log
 strategies/**/runs/**
 !strategies/**/runs/.gitkeep
 strategies/**/sweeps/**
+strategies/**/optimize/**
+# Same run-artefact convention for any sibling strategy tree (e.g. statarb).
+strategies_statarb/**/runs/**
+strategies_statarb/**/sweeps/**
+strategies_statarb/**/optimize/**
 # Top-level cross-strategy artefacts (multistrat reports etc.)
 /runs/

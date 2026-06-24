@@ -18,21 +18,25 @@ DEFAULT_TF: str = "4h"
 
 DEFAULT_PARAMS: dict = {
     "ao_fast": 5,
-    "ao_slow": 21,
+    "ao_slow": 13,
     "fractal_window": 5,
     "long_only": 1,
-    "vol_target": 0.01,
+    "vol_target": 0.02,
     "adx_min": 25,
     "htf_ema": 50,
+    "continuation_ema": 20,
+    "continuation_atr_mult": 0.6,
 }
 
 PARAM_SPACE: dict = {
     "ao_fast": (3, 15),
-    "ao_slow": (20, 60),
+    "ao_slow": (10, 60),
     "fractal_window": (5, 5),  # Usually fixed at 5 for Williams
     "long_only": (0, 1),
     "adx_min": (10, 40),
     "htf_ema": (20, 200),
+    "continuation_ema": (10, 50),
+    "continuation_atr_mult": (0.25, 2.0),
 }
 
 
@@ -46,6 +50,8 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     long_only = int(params.get("long_only", 0)) == 1
     adx_min = float(params.get("adx_min", 25))
     htf_ema_period = int(params.get("htf_ema", 50))
+    continuation_ema_period = int(params.get("continuation_ema", 20))
+    continuation_atr_mult = float(params.get("continuation_atr_mult", 0.6))
 
     # --- Awesome Oscillator ---
     median_price = (high + low) / 2
@@ -120,7 +126,20 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     # --- Signals ---
     # Price breaks above/below the last known fractal
     # confirmed by AO sign, ADX trend strength, and HTF trend
-    long_pos = (close > up_fractal_val) & (ao > 0) & adx_filter & trend_up
+    breakout_long = close > up_fractal_val
+    continuation_ema = close.ewm(span=continuation_ema_period, adjust=False).mean()
+    atr_for_signal = tr.ewm(span=atr_period, adjust=False, min_periods=atr_period).mean()
+    continuation_long = (
+        (close > continuation_ema)
+        & (close <= continuation_ema + continuation_atr_mult * atr_for_signal)
+        & (close > close.shift(1))
+    )
+    long_pos = (
+        (breakout_long | continuation_long)
+        & (ao > 0)
+        & adx_filter
+        & trend_up
+    )
     short_pos = (close < dn_fractal_val) & (ao < 0) & adx_filter & trend_dn
 
     # --- Sizing (Optional vol-targeting) ---

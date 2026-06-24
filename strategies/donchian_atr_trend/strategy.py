@@ -21,10 +21,11 @@ DEFAULT_PARAMS: dict = {
     "trend_span": 100,
     "slope_lb": 12,
     "max_slope_pct": 0.05,
+    "side_slope_veto_pct": 0.010,
     "atr_period": 14,
-    "atr_stop_k": 2.5,
-    "max_hold_bars": 24,
-    "pierce_cooldown": 10,
+    "atr_stop_k": 2.3,
+    "max_hold_bars": 18,
+    "pierce_cooldown": 7,
     "bb_period": 20,
     "bb_lb": 180,
     "bb_q_max": 0.25,
@@ -35,6 +36,7 @@ PARAM_SPACE: dict = {
     "trend_span": (50, 300),
     "slope_lb": (6, 36),
     "max_slope_pct": (0.01, 0.10),
+    "side_slope_veto_pct": (0.005, 0.05),
     "atr_period": (7, 28),
     "atr_stop_k": (1.5, 5.0),
     "max_hold_bars": (8, 60),
@@ -62,6 +64,7 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     trend_span = int(params.get("trend_span", 100))
     slope_lb = int(params.get("slope_lb", 12))
     max_slope_pct = float(params.get("max_slope_pct", 0.05))
+    side_slope_veto_pct = float(params.get("side_slope_veto_pct", 0.010))
     atr_period = int(params.get("atr_period", 14))
     atr_stop_k = float(params.get("atr_stop_k", 2.5))
     max_hold = int(params.get("max_hold_bars", 24))
@@ -103,8 +106,8 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     recent_dn = pierced_dn.shift(1).rolling(pierce_cooldown, min_periods=1).sum().fillna(0)
     first_pierce_up = recent_up == 0
     first_pierce_dn = recent_dn == 0
-    fade_short = fade_short & first_pierce_up
-    fade_long = fade_long & first_pierce_dn
+    fade_short = fade_short & first_pierce_up & (slope_pct.shift(1) < side_slope_veto_pct)
+    fade_long = fade_long & first_pierce_dn & (slope_pct.shift(1) > -side_slope_veto_pct)
 
     fl = fade_long.values
     fs = fade_short.values

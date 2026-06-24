@@ -54,7 +54,7 @@ DEFAULT_PARAMS: dict = {
     "regime_lookback_days": 30,
     "regime_quantile": 0.2,
     "vol_floor_q": 0.65,
-    "atr_period": 14,
+    "atr_period": 7,
 }
 
 PARAM_SPACE: dict = {

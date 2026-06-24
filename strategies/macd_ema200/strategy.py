@@ -51,6 +51,7 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     atr_period = int(params.get("atr_period", 14))
     vol_lookback = int(params.get("vol_lookback", 200))
     vol_q = float(params.get("vol_q", 0.70))
+    adx_min = float(params.get("adx_min", 18.0))
 
     ema_fast = close.ewm(span=fast, adjust=False, min_periods=fast).mean()
     ema_slow = close.ewm(span=slow, adjust=False, min_periods=slow).mean()
@@ -63,8 +64,6 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     # slope kills flat-regime entries that price-only filter admits in chop.
     slope_lb = max(int(params.get("slope_lb", 24)), 1)
     ema_slope = ema_trend - ema_trend.shift(slope_lb)
-    up_regime = (close > ema_trend) & (ema_slope > 0)
-    dn_regime = (close < ema_trend) & (ema_slope < 0)
 
     # Extreme-vol gate: skip entries in top vol_q quantile of ATR%.
     prev_close = close.shift(1)
@@ -75,11 +74,25 @@ def _signals_for_symbol(df: pd.DataFrame, params: dict) -> pd.Series:
     ], axis=1).max(axis=1)
     atr = tr.ewm(span=atr_period, adjust=False, min_periods=atr_period).mean()
     atr_pct = atr / close
+    min_ema_atr = float(params.get("min_ema_atr", 0.5))
+    ema_distance_ok = (close - ema_trend).abs() >= (min_ema_atr * atr)
+    up_regime = (close > ema_trend) & (ema_slope > 0) & ema_distance_ok
+    dn_regime = (close < ema_trend) & (ema_slope < 0) & ema_distance_ok
+
     vol_thresh = atr_pct.rolling(vol_lookback, min_periods=vol_lookback).quantile(vol_q)
     vol_ok = atr_pct <= vol_thresh
 
-    long_pos = (macd > sig) & up_regime & vol_ok
-    short_pos = (macd < sig) & dn_regime & vol_ok
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=df.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=df.index)
+    plus_di = 100 * plus_dm.ewm(span=atr_period, adjust=False, min_periods=atr_period).mean() / atr
+    minus_di = 100 * minus_dm.ewm(span=atr_period, adjust=False, min_periods=atr_period).mean() / atr
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    trend_strength_ok = dx.ewm(span=atr_period, adjust=False, min_periods=atr_period).mean() >= adx_min
+
+    long_pos = (macd > sig) & up_regime & vol_ok & trend_strength_ok
+    short_pos = (macd < sig) & dn_regime & vol_ok & trend_strength_ok
 
     # Vol-targeted sizing: scale by vol_target / current atr% (clipped to avoid
     # explosive sizing in very-low-vol bars).

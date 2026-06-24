@@ -163,6 +163,43 @@ def _load_best(strategy: str) -> dict | None:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def _history_summary(hist_path: Path) -> tuple[int, str | None, float | None, int | None]:
+    n_iters = 0
+    first_started: str | None = None
+    best_pnl: float | None = None
+    best_pnl_iter: int | None = None
+    if not hist_path.exists():
+        return n_iters, first_started, best_pnl, best_pnl_iter
+    with hist_path.open(encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            n_iters += 1
+            row = None
+            if first_started is None:
+                try:
+                    row = json.loads(line)
+                    first_started = row.get("started")
+                except Exception:
+                    pass
+            if row is None:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+            pnl = ((row.get("wf_aggregate") or {}).get("stitched_full_return"))
+            if pnl is None:
+                pnl = ((row.get("wf_aggregate") or {}).get("stitched_oos_return"))
+            if pnl is None:
+                pnl = ((row.get("metrics_oos") or {}).get("total_return"))
+            if isinstance(pnl, (int, float)) and math.isfinite(float(pnl)):
+                pnl_f = float(pnl)
+                if best_pnl is None or pnl_f > best_pnl:
+                    best_pnl = pnl_f
+                    best_pnl_iter = row.get("iter")
+    return n_iters, first_started, best_pnl, best_pnl_iter
+
+
 def _stitched_total_return(strategy: str, iter_id: int) -> dict | None:
     """Read the saved equity parquet for an iter and stitch per-window
     returns into one continuous 24mo equity. Returns total compounded
@@ -437,16 +474,24 @@ def api_strategies():
             except Exception:
                 pass
         hist_path = p / "runs" / "history.jsonl"
-        n_iters = 0
-        if hist_path.exists():
-            n_iters = sum(1 for _ in hist_path.open(encoding="utf-8") if _.strip())
+        n_iters, first_started, best_pnl, best_pnl_iter = _history_summary(hist_path)
         out.append({
             "name": p.name,
             "description": _extract_description(p / "strategy.py"),
             "best_composite": (best or {}).get("composite"),
             "best_iter": (best or {}).get("iter"),
+            "best_pnl": best_pnl,
+            "best_pnl_iter": best_pnl_iter,
             "n_iters": n_iters,
+            "first_started": first_started,
         })
+    out.sort(
+        key=lambda row: (
+            row.get("best_pnl") is None,
+            -(row.get("best_pnl") or 0.0),
+            row["name"],
+        )
+    )
     return _sanitize(out)
 
 

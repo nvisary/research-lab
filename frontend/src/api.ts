@@ -3,7 +3,10 @@ export type StrategySummary = {
   description: string | null;
   best_composite: number | null;
   best_iter: number | null;
+  best_pnl: number | null;
+  best_pnl_iter: number | null;
   n_iters: number;
+  first_started: string | null;
 };
 
 export type Metrics = {

@@ -440,6 +440,38 @@ def _run_vectorbt(prices: pd.DataFrame, target_pos: pd.DataFrame,
     return pf
 
 
+def _spot_hedge_cashflows(asset_value: pd.DataFrame, prices: pd.DataFrame,
+                          costs=DEFAULT_COSTS) -> tuple[pd.Series, pd.Series]:
+    """Synthetic spot leg for cash-and-carry strategies.
+
+    The repo currently has perp OHLCV but no separate spot feed. For strategies
+    that export ``SPOT_HEDGE = True``, approximate a 1:1 hedge with spot priced
+    at the same close as the perp:
+
+      spot_notional_t = -perp_notional_t
+
+    This cancels the directional price leg while leaving perp funding in place.
+    It does not model spot/perp basis; if a real spot feed is added later this
+    function is the narrow place to swap the proxy price for true spot close.
+    """
+    idx = asset_value.index
+    av = asset_value.copy()
+    av.columns = [col[-1] if isinstance(col, tuple) else col for col in av.columns]
+    av = av.T.groupby(level=0).sum().T
+    hedge_notional = -av.reindex(index=idx, columns=prices.columns).fillna(0.0)
+    px = prices.reindex(index=idx, columns=hedge_notional.columns).ffill()
+
+    spot_ret = px.pct_change().replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    pnl = (hedge_notional.shift(1).fillna(0.0) * spot_ret).sum(axis=1)
+    pnl.name = "spot_hedge_pnl"
+
+    traded_notional = hedge_notional.diff().abs().fillna(hedge_notional.abs()).sum(axis=1)
+    one_way_cost = float(costs.spot_taker_fee) + float(costs.spot_slippage_bps) * 1e-4
+    cost = traded_notional * one_way_cost
+    cost.name = "spot_hedge_cost"
+    return pnl.reindex(idx, fill_value=0.0), cost.reindex(idx, fill_value=0.0)
+
+
 # --------------------------------------------------------------------------- #
 # Main entry points
 # --------------------------------------------------------------------------- #
@@ -568,11 +600,19 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
     # The harness uses adjusted-equity returns for ALL metrics; raw equity is
     # kept around only for diagnostics in return_curves.
     raw_equity_full = pf.value()
+    spot_hedge_enabled = bool(getattr(strategy_mod, "SPOT_HEDGE", False))
+    spot_hedge_pnl = pd.Series(0.0, index=raw_equity_full.index, name="spot_hedge_pnl")
+    spot_hedge_cost = pd.Series(0.0, index=raw_equity_full.index, name="spot_hedge_cost")
+    try:
+        asset_value = pf.asset_value(group_by=False)
+    except Exception:
+        asset_value = prices * 0.0  # vectorbt API drift fallback: no adjustment
+    if spot_hedge_enabled:
+        spot_hedge_pnl, spot_hedge_cost = _spot_hedge_cashflows(
+            asset_value, prices, costs=costs,
+        )
+        raw_equity_full = raw_equity_full + spot_hedge_pnl.cumsum() - spot_hedge_cost.cumsum()
     if costs.apply_funding:
-        try:
-            asset_value = pf.asset_value(group_by=False)
-        except Exception:
-            asset_value = prices * 0.0  # vectorbt API drift fallback: no adjustment
         fcf = funding_cashflows(asset_value, split.train_start, split.oos_end)
         adj_equity_full = adjust_equity(raw_equity_full, fcf)
     else:
@@ -648,6 +688,8 @@ def run_split(strategy_mod, params: dict, symbols: list[str], split: Split,
         out["equity"] = adj_equity_full[adj_equity_full.index >= ts]
         out["raw_equity"] = raw_equity_full[raw_equity_full.index >= ts]
         out["funding_cashflow"] = fcf[fcf.index >= ts]
+        out["spot_hedge_pnl"] = spot_hedge_pnl[spot_hedge_pnl.index >= ts]
+        out["spot_hedge_cost"] = spot_hedge_cost[spot_hedge_cost.index >= ts]
         # Benchmark was normalised at the first PADDED bar (data_start),
         # so by the time we trim to train_start it has already absorbed
         # the padding-period market drift. Rebase so bench starts at the
@@ -725,6 +767,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
             "split_cutoff": main.pop("split_cutoff"),
             "raw_equity": main.pop("raw_equity", None),
             "funding_cashflow": main.pop("funding_cashflow", None),
+            "spot_hedge_pnl": main.pop("spot_hedge_pnl", None),
+            "spot_hedge_cost": main.pop("spot_hedge_cost", None),
             "oos_returns": main.pop("oos_returns", None),
             "trades": main.pop("trades", None),
         }
@@ -763,6 +807,8 @@ def run(strategy_dir: str | Path, period_start: str, period_end: str,
                     "split_cutoff": w.pop("split_cutoff"),
                     "raw_equity": w.pop("raw_equity", None),
                     "funding_cashflow": w.pop("funding_cashflow", None),
+                    "spot_hedge_pnl": w.pop("spot_hedge_pnl", None),
+                    "spot_hedge_cost": w.pop("spot_hedge_cost", None),
                     "oos_returns": w.pop("oos_returns", None),
                     "trades": w.pop("trades", None),
                 })

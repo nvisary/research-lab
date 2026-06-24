@@ -33,6 +33,11 @@ class CostModel:
     maker_fee: float = 0.0002    # Bybit perp maker (rebate ignored conservatively)
     slippage_bps: float = 1.0    # legacy flat slippage (used when dynamic off)
     apply_funding: bool = True   # subtract funding-rate cashflows from equity
+    spot_taker_fee: float = 0.0010
+    """Spot taker fee used only by strategies that opt into SPOT_HEDGE."""
+
+    spot_slippage_bps: float = 1.0
+    """Flat spot slippage used only by strategies that opt into SPOT_HEDGE."""
 
     # ----- Dynamic costs (off by default) -----
     use_dynamic_spread: bool = False

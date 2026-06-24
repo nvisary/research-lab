@@ -335,6 +335,10 @@ def run_one(strategy_dir: Path, cfg: IterationConfig, note: str = "") -> dict:
             cols["raw_equity"] = c["raw_equity"].reindex(eq.index).values
         if c.get("funding_cashflow") is not None:
             cols["funding_cashflow"] = c["funding_cashflow"].reindex(eq.index).values
+        if c.get("spot_hedge_pnl") is not None:
+            cols["spot_hedge_pnl"] = c["spot_hedge_pnl"].reindex(eq.index).values
+        if c.get("spot_hedge_cost") is not None:
+            cols["spot_hedge_cost"] = c["spot_hedge_cost"].reindex(eq.index).values
         df = _pd.DataFrame(cols)
         if window is not None:
             df["window"] = window

@@ -302,6 +302,10 @@ def _stitched(eq_df: pd.DataFrame, tr_path: Path) -> dict:
 
     if "funding_cashflow" in eq_df.columns:
         out["funding_paid_usd"] = round(float(eq_df["funding_cashflow"].sum()), 2)
+    if "spot_hedge_pnl" in eq_df.columns:
+        out["spot_hedge_pnl_usd"] = round(float(eq_df["spot_hedge_pnl"].sum()), 2)
+    if "spot_hedge_cost" in eq_df.columns:
+        out["spot_hedge_cost_usd"] = round(float(eq_df["spot_hedge_cost"].sum()), 2)
 
     return out
 
@@ -546,12 +550,20 @@ def _flags(diag: dict, summary: dict) -> list[str]:
     cmp_ret = stitched.get("compounded_return_pct")
     trade_sum = stitched.get("trade_pnl_sum_usd")
     funding = stitched.get("funding_paid_usd")
+    spot_pnl = stitched.get("spot_hedge_pnl_usd")
+    spot_cost = stitched.get("spot_hedge_cost_usd")
     if cmp_ret is not None and trade_sum is not None:
         funding_str = (f"funding ${funding:+.0f}"
                         if funding is not None else "funding n/a")
+        spot_str = ""
+        if spot_pnl is not None or spot_cost is not None:
+            spot_str = (
+                f", spot hedge ${spot_pnl or 0:+.0f}, "
+                f"spot costs ${-(spot_cost or 0):+.0f}"
+            )
         flags.append(
             f"ℹ stitched {cmp_ret:+.2f}pct vs trade pnl ${trade_sum:+.0f} "
-            f"({funding_str})")
+            f"({funding_str}{spot_str})")
 
     # Selection-bias trap: positive aggregate OOS Sharpe but negative
     # 24mo compounded return = edge lives only on OOS slices, not

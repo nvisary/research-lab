@@ -10,7 +10,7 @@
   "last_raw_equity": 16720.454022,
   "total_funding_cashflow": 761.571395,
   "max_dd": 0.173142,
-  "oos_sharpe": 0.953655,
+  "oos_sharpe": 0.952781,
   "oos_n_trades": 0,
   "equity_samples": {
     "2024-01-01 00:00:00+00:00": 10000.0,

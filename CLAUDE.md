@@ -15,8 +15,15 @@ When the user says "iterate on `<strategy_name>`" or similar:
 
 1. **Read state.** `strategies/<name>/program.md`, `strategies/<name>/strategy.py`,
    `strategies/<name>/runs/best.json`, last ~20 entries of `runs/history.jsonl`.
-2. **Form one hypothesis.** State it in one sentence. Reference what it's
-   responding to in the history (avoid repeating refuted ideas).
+2. **Measure, then form one hypothesis.** Before guessing a param or filter,
+   run a train-only EDA tool to ground the hypothesis in data — see AGENTS.md §7b:
+   `uv run python -m runner.explore --list`, then
+   `uv run python -m runner.explore strategies/<name> --tool <vol_regime_split|return_autocorr|funding_corr>`.
+   State the hypothesis in one sentence as a **prediction** ("acf<0 → MR entry
+   should KEEP with OOS Sharpe > X"). Reference what it's responding to in the
+   history (avoid repeating refuted ideas). EDA is **train-only** — never read
+   raw OOS/holdout parquet to "look around". If no tool fits, write one in
+   `strategies/<name>/research/` (it auto-registers for `runner.explore`).
 3. **Edit `strategies/<name>/strategy.py` only.** One change at a time —
    never multi-change unless the user explicitly says so. Use
    `harness.utils.resample_higher` for any multi-TF logic.
@@ -54,9 +61,11 @@ When the user says "iterate on `<strategy_name>`" or similar:
 
 ## Rules you cannot break
 
-- Edit only `strategies/<name>/strategy.py` and `strategies/<name>/program.md`.
-  Both are part of your workspace: `program.md` is your hypothesis log and
-  "what's been ruled out" notebook — keep it current as iterations refute ideas.
+- Edit only `strategies/<name>/strategy.py`, `strategies/<name>/program.md`, and
+  scratch EDA tools under `strategies/<name>/research/`. `program.md` is your
+  hypothesis log and "what's been ruled out" notebook — keep it current as
+  iterations refute ideas. `research/` holds reusable train-only EDA probes
+  (AGENTS.md §7b) — never put raw-data peeking or OOS access there.
 - Never touch `harness/`, `runner/`, `datafeed/`, `web/`, `frontend/`, `tests/`.
   If a harness bug seems likely, **report it to the user**, don't patch it.
 - Never look at the holdout (`strategies/<name>/runs/holdout/`) or run
@@ -68,6 +77,11 @@ When the user says "iterate on `<strategy_name>`" or similar:
 ## Useful commands
 
 ```bash
+# TRAIN-ONLY quantitative EDA → measure before guessing (AGENTS.md §7b)
+# never sees OOS/holdout; structured summary + metrics to ground a hypothesis.
+uv run python -m runner.explore --list
+uv run python -m runner.explore strategies/<name> --tool <tool> [--param k=v ...]
+
 # one iteration with audit + WF=4 + funding-adjusted equity
 uv run python -m runner.iterate strategies/<name> --note "<hypothesis>"
 

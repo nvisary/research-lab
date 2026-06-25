@@ -8,6 +8,40 @@ Before applying anything here, read `AGENTS.md` — especially the no-lookahead,
 
 ---
 
+## 0. Measure before you guess — quantitative EDA
+
+Every technique below is a *hypothesis*. The cheapest way to pick a good one is
+to **measure the relevant property of the data first**, then choose the
+technique the measurement points to — rather than trying techniques at random
+and keeping whatever lifts the composite (that is score-gaming, not research).
+
+`runner.explore` runs *research tools* over the **train-only** slice (the same
+boundary `runner.optimize` uses, §6.4 — never OOS, never holdout) and returns a
+structured `summary` + scalar `metrics`:
+
+```bash
+uv run python -m runner.explore --list                              # catalog
+uv run python -m runner.explore strategies/<name> --tool return_autocorr
+uv run python -m runner.explore strategies/<name> --tool vol_regime_split --param vol_window=48
+```
+
+Map measurement → technique:
+
+| You want to decide… | Measure with… | Then reach for… |
+|---|---|---|
+| MR vs momentum entry | `return_autocorr` (lag-1 acf, variance ratio) | §1.3 vs §1.4 |
+| whether a vol filter helps | `vol_regime_split` (acf/return by regime) | §2.2, §3.5 |
+| a funding tilt / carry | `funding_corr` (funding→fwd-return sign) | §2.4 |
+
+The discipline is the same as §6.2: **measure on train, predict, let OOS judge
+blind.** Write the measured number and your prediction into `program.md` *before*
+running `runner.iterate`; a prediction that OOS refutes is a real finding, not a
+failed lottery ticket. If no tool answers your question, write one in
+`strategies/<name>/research/` — see AGENTS.md §7b for the contract. Current
+catalog: [`harness/research/REGISTRY.md`](harness/research/REGISTRY.md).
+
+---
+
 ## 1. Signal generation — the *what*
 
 ### 1.1 Indicator family swaps

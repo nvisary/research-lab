@@ -78,6 +78,12 @@ For each cycle:
 
    *Bad* hypotheses: "let me try `fast=15`"; "this number worked in another paper"; "more indicators = better".
 
+   **Prefer hypotheses grounded in a measurement.** Before guessing, run a
+   `runner.explore` research tool on the train-only data (§7b) and let what you
+   measure motivate the change — e.g. measure return autocorrelation, *then*
+   decide between an MR and a momentum entry. This turns each `runner.iterate`
+   into a test of a prediction rather than a lottery ticket.
+
 3. **One change at a time.** Multi-change edits are scientifically useless — you can't attribute the result. The harness keeps you honest by reverting losers, but only if you change one thing.
 
 4. **Run.** Use the dashboard or:
@@ -237,7 +243,8 @@ work unchanged**.
 4. **No external state** in `generate_signals` — files, env vars, network, RNG with fixed seeds tied to dates.
 5. **0 trades = ineligible.** A strategy that never trades scores `−∞`.
 6. **Never look at the holdout during iteration.** This includes computing it "out of curiosity". Once seen, it's tainted.
-7. **Never edit anything outside `strategies/<name>/`.** If `harness/` has a bug, report it to the human.
+7. **Never edit anything outside `strategies/<name>/`.** If `harness/` has a bug, report it to the human. (You *may* add scratch EDA tools under `strategies/<name>/research/` — see §7b.)
+8. **EDA is train-only.** When you measure the data to form a hypothesis (§7b), do it through `runner.explore` / `harness.research.TrainData`, which clips to the train slice. **Never read raw OOS/holdout parquet directly to "look around" before deciding what to test** — that overfits the *choice of what to test* to the data that scores you, and the lookahead audit cannot see it because the strategy code stays clean.
 
 ---
 
@@ -317,6 +324,70 @@ bootstrap, cost-aware decisions, decision-tree heuristics for common symptoms �
 see [`METHODS.md`](METHODS.md). It's a vocabulary, not a recipe. Pick **one**
 technique per iteration and articulate the hypothesis it embodies in `--note`.
 
+## 7b. Quantitative EDA — measure before you guess
+
+The default failure mode of an iterating agent is to *guess* a parameter or a
+filter, run `runner.iterate`, and repeat until the composite looks good. That is
+random search with extra steps — and it games the score instead of finding edge.
+
+The disciplined alternative: **measure a property of the data first, then form a
+hypothesis that makes a prediction, then let OOS judge it blind.**
+
+`runner.explore` runs a *research tool* — a small function that answers one
+quantitative question about the **train-only** data and returns a structured
+result (`summary` + scalar `metrics`):
+
+```bash
+uv run python -m runner.explore --list                       # what tools exist
+uv run python -m runner.explore strategies/<name> --tool vol_regime_split
+uv run python -m runner.explore strategies/<name> --tool return_autocorr --param max_lag=20
+uv run python -m runner.explore strategies/<name> --tool funding_corr --symbol ETHUSDT
+```
+
+Shipped tools: `vol_regime_split` (is behavior different by volatility regime?),
+`return_autocorr` (mean-reverting or trending, at what horizon?), `funding_corr`
+(does funding carry a forward-return sign?). The list grows; always `--list` first.
+
+**The evidence-driven loop:**
+
+1. `runner.explore … --tool <T>` — measure. Read the `summary` + `metrics`.
+2. Write the finding into `program.md`, then a **falsifiable** hypothesis that
+   predicts an OOS effect: *"return_autocorr shows lag-1 acf −0.08 → an MR entry
+   on 1h has structural basis; expect KEEP with OOS Sharpe > current."*
+3. Make the ONE corresponding edit to `strategy.py`.
+4. `runner.iterate` — OOS judges the prediction blind.
+5. In `program.md`, record what the measurement predicted vs what OOS delivered.
+   A divergence is itself a finding (the effect didn't survive costs / regime shift).
+
+**Writing your own tool — it becomes reusable for every future agent.** If no
+shipped tool answers your question, write one in `strategies/<name>/research/`:
+
+```python
+# strategies/<name>/research/my_probe.py
+from harness.research import research_tool, ToolMeta, ResearchResult
+
+@research_tool(ToolMeta(
+    name="my_probe",
+    question="one line: what does this measure?",
+    params={"lookback": "bars in the estimate"},
+    tags=["volatility"],
+))
+def my_probe(data, lookback: int = 30) -> ResearchResult:
+    rets = data.returns()          # train-only, already clipped — never load raw files
+    ...
+    return ResearchResult(summary="one-line finding", metrics={"x": 1.23})
+```
+
+`runner.explore strategies/<name> --tool my_probe` auto-imports that directory.
+`data` is a `TrainData` handle: `data.ohlcv(sym)`, `data.funding(sym)`,
+`data.returns(sym)`, `data.close(sym)` — all clipped to the train window, so a
+scratch tool is train-only by construction. If a probe proves broadly useful,
+the operator promotes it into `harness/research/lib/` so it shows up in `--list`
+for every strategy. **Read [`harness/research/REGISTRY.md`](harness/research/REGISTRY.md)
+for the current catalog.**
+
+---
+
 ## 8. Patterns that are usually fruitful
 
 - **Regime conditioning**: only trade when realized vol is in some band, or when a long-MA slope is positive. Markets have personality changes; a strategy can profit in one regime and bleed in another.
@@ -361,6 +432,12 @@ uv run python -m harness.backtest strategies/<name> --period 2024-01-01:2026-01-
 
 # one iteration with keep/revert + history append (default period = train+val)
 uv run python -m runner.iterate strategies/<name> --note "one-sentence hypothesis"
+
+# TRAIN-ONLY quantitative EDA → measure the data before guessing (see §7b)
+# Runs a research tool over the train slice only; never touches OOS/holdout.
+uv run python -m runner.explore --list                         # list tools
+uv run python -m runner.explore strategies/<name> --tool vol_regime_split
+uv run python -m runner.explore strategies/<name> --tool return_autocorr --param max_lag=20
 
 # TRAIN-ONLY parameter optimizer → universe of robust plateaus (see METHODS.md §6.4)
 # Searches PARAM_SPACE strictly inside the train slice; never touches OOS/holdout.

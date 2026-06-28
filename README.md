@@ -43,6 +43,41 @@ fresh-clone to running an LLM-driven research loop with Claude Code.
 
 LLM agents: read [`AGENTS.md`](AGENTS.md) before touching anything. For a catalog of concrete strategy-improvement techniques, see [`METHODS.md`](METHODS.md).
 
+## Notebooks — manual research
+
+`notebooks/` is the hand-driven research track, **separate from the
+`runner.iterate` auto-loop**. Here we explore data, plot, and test hypotheses
+with Claude one honest step at a time — no "one change per iter" rule and no
+keep/revert verdict machine — but the scientific discipline (baseline, pooling,
+OOS on a *different* period, no-lookahead, mind ~0.1–0.2% costs) still holds.
+The shared playbook is [`notebooks/pump/HOW_WE_WORK.md`](notebooks/pump/HOW_WE_WORK.md).
+
+Each subfolder is an independent research thread with its own `README.md`,
+`_lab.py` helper, and data loader:
+
+- `notebooks/pump/` — pump-fade (SHORT after a sharp spike)
+- `notebooks/dump/` — dump-bounce / reversion (LONG after a sharp drop)
+- `notebooks/pairs/` — statistical-arbitrage pairs
+- `notebooks/pump_dump_combined/` — pump + dump as one portfolio
+
+### Running notebooks
+
+```bash
+uv sync                      # ensure dev deps (jupyterlab/ipykernel/nbconvert)
+uv run jupyter lab           # interactive UI in the browser (for a human)
+```
+
+Headless execution (no UI — how Claude runs a notebook):
+
+```bash
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/<thread>/<nb>.ipynb
+```
+
+Plots: end a cell with `show("name")` instead of `plt.show()` — it renders
+inline *and* saves `_out/name.png`, which Claude reads as an image (the
+base64-PNG embedded in `.ipynb` is too large to read directly). `_out/` and
+`.ipynb_checkpoints/` are git-ignored.
+
 ## Known limitations
 
 These are real and documented; numbers will be biased upward by them. They

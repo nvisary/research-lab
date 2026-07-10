@@ -50,7 +50,43 @@ at 3x leverage with the latest corrected `pump_dump_combined` notebook stream
 from `15_2_kelly_walkforward`: rollover/catastrophe-stop events, WF entry
 filter, realistic DCA/capacity/slippage engine, and walk-forward per-leg sizing.
 It computes daily return correlation, rolling correlation, scatter/equity/
-drawdown charts, and a daily-rebalanced portfolio weight sweep.
+drawdown charts, and a daily-rebalanced portfolio weight sweep. **SUPERSEDED by
+nb11 — nb10 read `pump_rollover_visible.parquet` / `dump_rollover_visible.parquet`,
+which do not exist on disk, so its pump/dump leg was not the real corrected book.**
+
+`11_portfolio_vwb3x_pump_dump.ipynb` — **corrected replacement for nb10.** Rebuilds
+the pump_dump leg from the canonical full caches (`pump_rollover.parquet` /
+`dump_rollover.parquet`, as `15_2`) — WF classifier entry filter + catastrophe
+stop + capacity/slippage engine run as a clean lump-sum $1000 (no DCA cashflow),
+per-leg sizing **pump 8% / dump 3%**; VWB champion at **3x**. Visible window
+2024-01-01→2026-01-01, PD equity clipped to it (holdout untouched). **RESULT: the
+two lines are essentially UNCORRELATED — Pearson −0.05, Spearman +0.00** (VWB = 4h
+breakout on 4 majors, PD = 1m mean-reversion on ~170 microcaps: different assets,
+horizons, regimes). Standalone: PD Sharpe 3.64/CAGR 421%/DD −22.4% (in-sample
+small-cap ceiling), VWB 3x Sharpe 1.90/CAGR 168%/DD −24.2%. **Blending is a
+free lunch: Sharpe peaks at 30% VWB / 70% PD (4.19 > either leg), min drawdown at
+~50/50 (−14.5%, below both), best Calmar 45% VWB (21.0); CAGR falls monotonically
+with VWB weight (PD is the higher-return leg).** HONEST: both legs in-sample over
+one 2024→2026 window (no true alt-mania); PD worst trade still −37% (gap tail);
+pump8/dump3 = aggressive growth tilt (more money, worse DD than flat-5% bot); VWB
+3x leverage is an arbitrary risk dial (at 1x the optimal weight shifts). Robust
+takeaway = the near-zero correlation and the diversification it enables, not the
+headline Sharpe. Charts: `_out/port_11_corr.png`, `port_11_mix.png`, `port_11_frontier.png`.
+
+`12_combined_dca_1000_plus_200.ipynb` — **the two strategies run together as one DCA
+account: $1000 initial + $200/mo, full available data 2024-01→2026-04** (SOL delists
+2025-07). Reuses nb11's two daily-return streams (VWB 3x, PD pump8/dump3), blends at a
+fixed target weight (daily-rebalanced), and DCAs into the blend with NAV/unit accounting
+(monthly cash buys units at current NAV — no fake return jumps). Risk (Sharpe/Sortino/DD)
+on per-unit NAV; dollars & IRR money-weighted. **Contributed $6,400 →** 0% VWB (PD-only)
+$75k/11.7×/IRR 333%/Sh 3.49; **30% VWB / 70% PD $45k/7.1×/IRR 233%/Sh 3.67/Sortino 4.73/
+maxDD(NAV) −20.3% (best risk-adjusted, 24 green / 3 red months)**; 50/50 $31k/4.8×/Sh 3.11/
+DD −27%; 100% VWB $9.7k/1.5×/Sh 1.19/DD −59%. **The extra 2026 tail (beyond nb11's cutoff)
+is where VWB-3x-alone craters to −60% NAV DD while the blends stay shallow — the
+diversification story holds up out past the correlation window.** ~30% VWB is the
+Sharpe/DD sweet spot; more VWB trades growth for little extra smoothing. Same in-sample
+ceilings apply (worst PD trade −37%, 3x arbitrary, capacity binds as account grows, daily
+rebalance idealized). Charts: `_out/dca_12_account.png`, `dca_12_monthly.png`.
 
 ## Run
 

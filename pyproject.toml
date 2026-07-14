@@ -17,6 +17,9 @@ dependencies = [
     "statsmodels>=0.14",
     "scikit-learn>=1.4",
     "textual>=8.2.8",
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.11.1",
+    "qasync>=0.28.0",
 ]
 
 [tool.uv]

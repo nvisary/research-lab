@@ -41,8 +41,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="record only: parquet part rotation interval in seconds")
     ap.add_argument("--session-id", default=None, help="record only: override session dir name")
     ap.add_argument("--no-ui", action="store_true", help="headless: print snapshots instead of TUI")
+    ap.add_argument("--qt", action="store_true",
+                    help="PyQtGraph visual view (heatmap + CVD/force/OI) instead of the Textual table")
+    ap.add_argument("--focus", default=None, help="qt: symbol to show (default first)")
+    ap.add_argument("--snapshot", default=None,
+                    help="qt: also write the current view to this PNG each --snapshot-every")
+    ap.add_argument("--snapshot-every", type=float, default=None, help="qt: snapshot interval (s)")
+    ap.add_argument("--view-seconds", type=float, default=180.0,
+                    help="qt: visible time window in seconds (default 180)")
     ap.add_argument("--duration", type=float, default=None,
-                    help="headless only: stop after N seconds")
+                    help="headless/qt: stop after N seconds")
     ap.add_argument("--status-every", type=float, default=3.0,
                     help="headless only: snapshot print interval in seconds")
     return ap.parse_args(argv)
@@ -91,8 +99,15 @@ async def run_headless(engine: LiveEngine, duration: float | None, status_every:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.qt and args.depth == 25:
+        args.depth = 200   # the heatmap wants a full-depth book
     engine = build_engine(args)
-    if args.no_ui:
+    if args.qt:
+        from microstructure.live.qt_ui import run_qt
+        run_qt(engine, symbol=args.focus, duration=args.duration,
+               snapshot=args.snapshot, snapshot_every=args.snapshot_every,
+               view_seconds=args.view_seconds)
+    elif args.no_ui:
         asyncio.run(run_headless(engine, args.duration, args.status_every))
     else:
         from microstructure.live.ui import run_ui

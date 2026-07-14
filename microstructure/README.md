@@ -116,6 +116,49 @@ index) in bps, and a windowed liquidation count. The highlighted symbol gets a
 detail panel + a live colour-coded trade tape. Keys: `a` add · `d` remove · `q`
 quit.
 
+### Visual view (`--qt`)
+
+A Bookmap-style PyQtGraph renderer (`live/qt_ui.py`) is the visual sibling of the
+Textual table — same `Tap → SymbolState` seam, drawn instead of tabulated. A
+**heatmap** (x=time, y=price, colour=resting size: asks red / bids blue) carries
+the white mid line, green/red trade bubbles and liquidation marks; below it sit
+**CVD**, **force** (taker vol/s, buy up / sell down) and **OI** strip plots. It
+runs in the one qasync asyncio loop (no threads). The heatmap's price band is
+**fit per symbol from that symbol's own captured book** (sized so the bulk of the
+stored depth spans the rows), so majors with a dense fine-tick book (BTC) show
+real vertical structure instead of a thin line while coarse-tick alts still fill
+the band. The fitted bin size is fixed once and the grid scrolls **vertically** as
+the mid drifts — liquidity history is kept at each absolute price rather than
+wiped, so the map and mid line cover the same time span even on a trending/pumping
+symbol.
+
+```bash
+# visual view: 180s window, focus BTC, full-depth book auto-selected
+uv run python -m microstructure.live --symbols BTCUSDT,SOLUSDT --qt --focus BTCUSDT
+
+# narrower window + periodic PNG snapshot (also lets a headless run be verified)
+uv run python -m microstructure.live --symbols BTCUSDT --qt --view-seconds 120 \
+    --duration 60 --snapshot view.png --snapshot-every 15
+```
+
+Keys: `f` toggle **follow** (auto-scroll/-range; mouse zoom or pan drops out of
+follow until pressed again) · `c` **centre/reset** the view (re-frame the focused
+symbol on its own price scale + re-enter follow) · `space` **freeze** the display
+(data keeps flowing) · `1`..`9` focus a symbol (each keeps its own accumulated
+buffers; switching auto-frames the new symbol, so assets on wildly different
+price scales — e.g. BTC vs an alt — frame correctly) · `t` toggle the **tape**
+between raw bubbles and a **clustered footprint** (one marker per time×price
+cell, size ∝ volume, colour by net delta; cells whose |net delta| clears the
+threshold drop **persistent horizontal level markers** that stay drawn as the
+view scrolls, so you can eyeball whether price later reacts there) · `s`
+snapshot. Mouse hover shows a **crosshair** with the time / price (and resting
+size) under the cursor. A compact **control row** tunes, live and without a
+restart: band × (a multiplier on the per-symbol adaptive band — widen/tighten it),
+contrast percentile, view-seconds, and the imbalance-marker threshold (0 disables
+the markers). Flags: `--focus <sym>`,
+`--view-seconds <s>` (default 180), `--snapshot <path>` / `--snapshot-every <s>`.
+Closing the window shuts the engine down cleanly.
+
 Design: `live/state.py` (`SymbolState` — rolling deques + incremental metrics),
 `live/metrics.py` (the extension registry), `live/engine.py` (`Tap` shim →
 reuses `RUNNERS`; optional `Sink` for `--record`), `live/ui.py` (Textual),

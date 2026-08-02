@@ -61,6 +61,67 @@ def build_book(PUMP, DUMP, filtered=True):
     return pd.concat([pa[cols], da[cols]]).sort_values("entry").reset_index(drop=True)
 
 
+# ── v3: честная рампа ────────────────────────────────────────────────────────
+# Всё ниже АДДИТИВНО. Ничего выше не менялось, поэтому nb00–nb05 воспроизводятся
+# бит-в-бит на старых кэшах. v3 отличается тем, что моделирует реальный scale-in бота
+# (см. _build_signals_v3.py): доля развёрнутого капитала `frac` и средняя цена только
+# по тем заливкам, которые бот успевает сделать до набора размера.
+
+BASES_V3 = [0.01, 0.02, 0.03, 0.05, 0.10, 0.20, 0.40, 0.60, 1.00]  # ДОЛЖНА совпадать с
+# _build_signals_v3.BASES — теги колонок b<j> позиционные, рассинхрон молча даст не ту базу.
+
+
+def ramp_frac(k, base=0.05):
+    """Доля целевого размера после k траншей: min(1, base*(1+2+..+k)).
+    Проверено против 1836 логированных сделок бота (совпадение 99.35%)."""
+    return np.minimum(1.0, base * np.asarray(k, dtype=float) * (np.asarray(k, dtype=float) + 1) / 2)
+
+
+def load_signals_v3(root="_out"):
+    PUMP = pd.read_parquet(f"{root}/pump_signals_v3.parquet")
+    DUMP = pd.read_parquet(f"{root}/dump_signals_v3.parquet")
+    for D in (PUMP, DUMP):
+        D["entry"] = naive(D["entry"])
+        for tag in ["et"] + [f"b{j}" for j in range(len(BASES_V3))]:
+            D[f"exit_{tag}"] = naive(D[f"exit_{tag}"])
+    return PUMP, DUMP
+
+
+def v3_tag(base):
+    """base=None → 'et' (конвенция эталона, полный размер); иначе 'b<j>' по BASES_V3."""
+    if base is None:
+        return "et"
+    if base not in BASES_V3:
+        raise ValueError(f"base {base} не в сетке {BASES_V3} — пересобери _build_signals_v3.py")
+    return f"b{BASES_V3.index(base)}"
+
+
+def build_book_v3(PUMP, DUMP, base=0.05, filtered=True):
+    """Книга v3 под заданный scalein_base_frac.
+
+    Возвращает те же колонки, что build_book, плюс `frac` (доля целевого размера,
+    которую бот реально развернёт) и `k` (число возможностей залить). Сайзинг —
+    через штатный `run_dca(ffrac=f_leg*frac)`, движок не менялся.
+    WF-фильтр учится на pnl ИМЕННО этой базы: фильтровать надо по тому, что реально заработаешь.
+    """
+    t = v3_tag(base)
+    keep = ["sym", "entry", "liq", "stream", "k", "frac", "kused", "pnl", "exit_ts"]
+    pa = PUMP.assign(pnl=PUMP[f"pnl_{t}"], exit_ts=PUMP[f"exit_{t}"],
+                     frac=PUMP[f"frac_{t}"], kused=PUMP[f"kused_{t}"])
+    da = DUMP.assign(pnl=DUMP[f"pnl_{t}"], exit_ts=DUMP[f"exit_{t}"],
+                     frac=DUMP[f"frac_{t}"], kused=DUMP[f"kused_{t}"])
+    if filtered:
+        pa = wf_filter(pa, PF, "pnl"); da = wf_filter(da, DF, "pnl")
+    return pd.concat([pa[keep], da[keep]]).sort_values("entry").reset_index(drop=True)
+
+
+def ffrac_v3(book, f_pump, f_dump, honest=True):
+    """Массив per-trade долей капитала для run_dca. honest=False → старая (завышенная)
+    модель: полный вес независимо от того, сколько траншей реально зальётся."""
+    base = np.where((book.stream == "pump").values, f_pump, f_dump)
+    return base * (book.frac.values if honest else 1.0)
+
+
 # ── портфельный движок run_dca (1:1 nb00/nb07/nb15_2) ────────────────────────
 FILL_MIN = 30; PART_CAP = 0.10; SPREAD = 0.0010; IMPACT = 0.10
 

@@ -23,6 +23,9 @@ strategies_statarb/**/optimize/**
 # Top-level cross-strategy artefacts (multistrat reports etc.)
 /runs/
 
-# manual research notebooks: outputs are reproducible, ignore PNG cache
+# manual research: books and plots are reproducible from the builders.
+# Manifests (<book>.meta.json) live beside the parquet and are ignored with it —
+# they describe a local artefact, not the code that makes one.
+lab/lines/**/_out/
 notebooks/**/_out/
 .ipynb_checkpoints/

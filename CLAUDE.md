@@ -54,12 +54,33 @@ When the user says "iterate on `<strategy_name>`" or similar:
    family. Never end a session leaving program.md staler than the
    running history.
 
-## Working in `notebooks/` — register and tone
+## Manual research lives in `lab/` — read it before touching a notebook
 
-`notebooks/**` is manual, hands-on research the user does *with* you — a
-different mode from the automated `runner.iterate` loop above. Playbook:
-[`notebooks/pump/HOW_WE_WORK.md`](notebooks/pump/HOW_WE_WORK.md); every line
-keeps its own journal in `notebooks/<line>/README.md`.
+**`lab/` is the entry point for all hands-on research.** Read
+[`lab/README.md`](lab/README.md) (what the engine is and why it exists) and
+[`lab/PLAYBOOK.md`](lab/PLAYBOOK.md) (how we work — pace, tone, scientific
+hygiene) before starting or continuing any research line. Lines live in
+`lab/lines/<name>/`, each with its own `README.md` journal.
+
+`notebooks/**` is now **archive only** — eleven closed lines, read-only, indexed
+in [`notebooks/_archive/README.md`](notebooks/_archive/README.md). Go there for
+what has already been ruled out, never to add new work. The old
+`notebooks/<line>/_lab.py` convention is dead; it had drifted into six versions.
+
+Non-negotiable mechanics (they exist because three lines died to lookahead
+found two-to-three notebooks *after* it entered):
+
+- Books are `lab.EventBook`: every column declares `asof`, so filtering,
+  grouping and model-fitting are only possible on causal columns. `where()` and
+  `join()` require a `why=` and record how the sample narrowed.
+- `lab.mode("conclude")` before computing any number you will show anyone —
+  including yourself in a month. In that mode audit violations raise.
+- Windows come from `lab.WINDOWS` only. Never redefine them in a notebook.
+- TEST is opened through `lab.open_test(line, reason)`, which logs the look.
+  Looking to *kill* a candidate is nearly safe; looking to *choose* is not.
+- Universe scans go through `lab.scan` (parallel), books are saved through
+  `EventBook.save()` (writes a manifest). Kill-criterion is written *before*
+  the run.
 
 The tone here is deliberately warmer than in the strategy loop. Be friendly
 and supportive, and actively encourage the user's own hypotheses:
@@ -78,7 +99,7 @@ and supportive, and actively encourage the user's own hypotheses:
   burying the caveat — but "this doesn't survive costs" lands better with the
   reasoning attached and the salvage path named, if there is one.
 - **Don't verdict-dump.** The 3-line format at the bottom of this file is for
-  `runner.iterate` only. In notebooks: one experiment at a time, explained
+  `runner.iterate` only. In `lab/`: one experiment at a time, explained
   slowly in plain language, jargon defined with intuition.
 - **Warm about the person, ruthless about the data.** Support never means
   softening a metric, skipping a lookahead check, or letting a dead idea look
@@ -99,6 +120,12 @@ and supportive, and actively encourage the user's own hypotheses:
   (AGENTS.md §7b) — never put raw-data peeking or OOS access there.
 - Never touch `harness/`, `runner/`, `datafeed/`, `web/`, `frontend/`, `tests/`.
   If a harness bug seems likely, **report it to the user**, don't patch it.
+- `notebooks/_archive/` is read-only history. Never add, edit or re-run
+  anything there — new research goes to `lab/lines/<name>/`.
+- Never weaken `lab/`'s audit to make a result pass. If `lab.audit` blocks in
+  `conclude` mode, the finding is wrong or the schema is wrong — fix one of
+  those, never the check. This is the same rule as "never bypass the lookahead
+  audit" above, and it exists for the same reason.
 - Never look at the holdout (`strategies/<name>/runs/holdout/`) or run
   `runner.holdout` during iteration. The user calls it manually as a
   one-shot sanity check after iteration is complete.

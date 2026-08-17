@@ -43,34 +43,42 @@ fresh-clone to running an LLM-driven research loop with Claude Code.
 
 LLM agents: read [`AGENTS.md`](AGENTS.md) before touching anything. For a catalog of concrete strategy-improvement techniques, see [`METHODS.md`](METHODS.md).
 
-## Notebooks — manual research
+## `lab/` — manual research
 
-`notebooks/` is the hand-driven research track, **separate from the
+[`lab/`](lab/README.md) is the hand-driven research track, **separate from the
 `runner.iterate` auto-loop**. Here we explore data, plot, and test hypotheses
 with Claude one honest step at a time — no "one change per iter" rule and no
 keep/revert verdict machine — but the scientific discipline (baseline, pooling,
-OOS on a *different* period, no-lookahead, mind ~0.1–0.2% costs) still holds.
-The shared playbook is [`notebooks/pump/HOW_WE_WORK.md`](notebooks/pump/HOW_WE_WORK.md).
+OOS on a *different* period, no-lookahead, mind ~0.1–0.2% costs) still holds,
+and the engine enforces the parts that can be enforced mechanically.
 
-Each subfolder is an independent research thread with its own `README.md`,
-`_lab.py` helper, and data loader:
+The engine exists because three research lines died to lookahead that entered
+through *selection* — the anchor of an event, the size of a position, an inner
+join — rather than through a missing `.shift()`. So an `lab.EventBook` makes
+every column declare when it becomes known, and refuses to filter on one that
+is only known afterwards. See [`lab/README.md`](lab/README.md) for the
+mechanics and [`lab/PLAYBOOK.md`](lab/PLAYBOOK.md) for how we work.
 
-- `notebooks/pump/` — pump-fade (SHORT after a sharp spike)
-- `notebooks/dump/` — dump-bounce / reversion (LONG after a sharp drop)
-- `notebooks/pairs/` — statistical-arbitrage pairs
-- `notebooks/pump_dump_combined/` — pump + dump as one portfolio
+Each line is an independent research thread in `lab/lines/<name>/` with its own
+`README.md` journal, `_build_*.py` builders, and notebooks. Eleven earlier lines
+are archived read-only in
+[`notebooks/_archive/`](notebooks/_archive/README.md) — go there for what has
+already been ruled out.
 
 ### Running notebooks
 
 ```bash
-uv sync                      # ensure dev deps (jupyterlab/ipykernel/nbconvert)
-uv run jupyter lab           # interactive UI in the browser (for a human)
+uv sync                              # dev deps (jupyterlab/ipykernel/nbconvert)
+uv run jupyter lab                   # interactive UI in the browser (for a human)
+uv run python -m lab new <line>      # scaffold a new research line
+uv run python -m lab audit <book>    # check an event book and its manifest
+uv run python -m pytest lab/tests -q # regressions on the engine itself
 ```
 
 Headless execution (no UI — how Claude runs a notebook):
 
 ```bash
-uv run jupyter nbconvert --to notebook --execute --inplace notebooks/<thread>/<nb>.ipynb
+uv run jupyter nbconvert --to notebook --execute --inplace lab/lines/<line>/<nb>.ipynb
 ```
 
 Plots: end a cell with `show("name")` instead of `plt.show()` — it renders

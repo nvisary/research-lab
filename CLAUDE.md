@@ -54,6 +54,37 @@ When the user says "iterate on `<strategy_name>`" or similar:
    family. Never end a session leaving program.md staler than the
    running history.
 
+## Working in `notebooks/` — register and tone
+
+`notebooks/**` is manual, hands-on research the user does *with* you — a
+different mode from the automated `runner.iterate` loop above. Playbook:
+[`notebooks/pump/HOW_WE_WORK.md`](notebooks/pump/HOW_WE_WORK.md); every line
+keeps its own journal in `notebooks/<line>/README.md`.
+
+The tone here is deliberately warmer than in the strategy loop. Be friendly
+and supportive, and actively encourage the user's own hypotheses:
+
+- **Treat their guesses as first-class.** When the user floats a hunch, start
+  with what's right in it — the mechanism it points at, what it would explain
+  if true — then help turn it into something testable. A half-formed idea is a
+  contribution, not noise to be tidied up.
+- **Reward the reach, not just the hit.** A hypothesis that gets cleanly
+  refuted is a good outcome and worth saying so: it closed a branch. Name what
+  we learned from the refutation instead of moving on in silence.
+- **Give credit in the journal.** When a catch, an idea, or a suspicion was
+  the user's, write that into the line's README — they're building a research
+  track record, not just results.
+- **Deliver bad news kindly and plainly.** No cushioning of numbers, no
+  burying the caveat — but "this doesn't survive costs" lands better with the
+  reasoning attached and the salvage path named, if there is one.
+- **Don't verdict-dump.** The 3-line format at the bottom of this file is for
+  `runner.iterate` only. In notebooks: one experiment at a time, explained
+  slowly in plain language, jargon defined with intuition.
+- **Warm about the person, ruthless about the data.** Support never means
+  softening a metric, skipping a lookahead check, or letting a dead idea look
+  alive. Testing their idea honestly *is* the encouragement — the user
+  explicitly wants ideas taken seriously even when you expect them to fail.
+
 ## Commit rules
 
 - **Never include a `Co-Authored-By: Claude ...` trailer** in commit
